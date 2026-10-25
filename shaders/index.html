@@ -122,7 +122,8 @@ h1 span{color:var(--sodium);display:block}
 .dirgrid button[aria-pressed="true"]{border-color:var(--sodium);background:rgba(255,179,71,.18)}
 .dirgrid button[aria-pressed="true"]::after{content:"ON";font:400 12px var(--display);color:var(--sodium)}
 #dirTag{font:400 13px var(--display);color:#1a1206;background:var(--sodium);padding:2px 7px;border-radius:5px;letter-spacing:.05em}
-#bAim{width:72px;height:72px;right:calc(var(--safe-r) + 32px);bottom:calc(var(--safe-b) + 128px);font-size:15px;background:rgba(200,40,50,.35)}
+#bAim{width:72px;height:72px;right:calc(var(--safe-r) + 32px);bottom:calc(var(--safe-b) + 128px);font-size:14px;background:rgba(200,40,50,.35)}
+#bAim.on{background:rgba(230,50,60,.95);border-color:#fff;box-shadow:0 0 14px rgba(255,80,80,.8)}
 #bDown{width:56px;height:56px;right:calc(var(--safe-r) + 196px);bottom:calc(var(--safe-b) + 28px)}
 .smallbtn{font:700 14px var(--ui);letter-spacing:.06em;text-transform:uppercase;padding:8px 14px;border-radius:8px;border:2px solid rgba(255,255,255,.3);background:rgba(0,0,0,.35);color:var(--chalk);text-decoration:none;cursor:pointer}
 #padHint{font:600 14px var(--ui);color:var(--sodium)}
@@ -227,10 +228,10 @@ kbd{font:700 13px var(--ui);background:#e9e3d6;color:#111;border-radius:4px;padd
       <span id="loading"></span>
     </div>
     <div class="row">
-      <a class="smallbtn" id="apkLink" href="https://drive.google.com/uc?export=download&amp;id=19py_e2lsm26d3gYGb9IZip--Y2exHlIH" target="_blank" rel="noopener">Download Android APK</a>
+      <a class="smallbtn" id="apkLink" href="https://bruceai-hub.github.io/harbor-city-hustle/downloads/HarborCityHustle.apk" target="_blank" rel="noopener">Download Android APK</a>
       <button class="smallbtn" id="updBtn" hidden>Check for updates</button>
       <a class="smallbtn" id="cloudLink" href="https://bruceai-hub.github.io/harbor-city-hustle/cloud.html" target="_blank" rel="noopener">Play in the cloud <b style="color:var(--sodium)">Beta</b></a>
-      <span class="lbl" id="verLbl">v1.2</span>
+      <span class="lbl" id="verLbl">v1.3</span>
       <span id="padHint" hidden>Controller connected: A = Story, Y = Director</span>
     </div>
     <p class="lede" id="apkNote" hidden></p>
@@ -3400,6 +3401,7 @@ const keys = {}, pressed = new Set();
 let mouseDown = false, rmb = false, pointerLocked = false;
 const TOUCH = {
   joy: null, look: null, btn: {}, jx: 0, jy: 0, edges: new Set(),
+  aimOn: false, // AIM on mobile is a tap-to-toggle switch: tap to hold aim, tap again to stop
   init() {
     if (!IS_TOUCH) return;
     const layer = $('touchLayer'), joy = $('joy'), knob = $('joyKnob');
@@ -3428,7 +3430,9 @@ const TOUCH = {
       if (this.look && e.pointerId === this.look.id) this.look = null;
     };
     layer.addEventListener('pointerup', up); layer.addEventListener('pointercancel', up);
-    for (const id of ['bAttack', 'bJump', 'bEnter', 'bGas', 'bBrake', 'bHb', 'bHorn', 'bDown', 'bAim']) {
+    // AIM toggles on each tap; it is not a hold button
+    $('bAim').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); AUDIO.init(); this.aimOn = !this.aimOn; $('bAim').classList.toggle('on', this.aimOn); }, { passive: false });
+    for (const id of ['bAttack', 'bJump', 'bEnter', 'bGas', 'bBrake', 'bHb', 'bHorn', 'bDown']) {
       const el = $(id); this.btn[id] = false;
       el.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); AUDIO.init(); this.btn[id] = true; this.edges.add(id); el.classList.add('down'); try { el.setPointerCapture(e.pointerId); } catch (_) { } }, { passive: false });
       const rel = e => { this.btn[id] = false; el.classList.remove('down'); };
@@ -3444,7 +3448,11 @@ const TOUCH = {
     const el = $('bEnter'), t = inCar ? 'EXIT' : near && near.driver ? 'STEAL' : 'CAR';
     if (el.textContent !== t) el.textContent = t;
     el.style.opacity = inCar || near ? 1 : 0.45;
-    $('bAim').hidden = !(foot && !WEAPONS[player.weapon].melee);
+    const aimOk = foot && !WEAPONS[player.weapon].melee;
+    if (!aimOk) this.aimOn = false; // leaving foot or switching to melee stops aiming
+    $('bAim').hidden = !aimOk;
+    $('bAim').classList.toggle('on', this.aimOn);
+    const aimLabel = this.aimOn ? 'AIMING' : 'AIM'; if ($('bAim').textContent !== aimLabel) $('bAim').textContent = aimLabel;
     const fly = DIRECTOR.fly && foot; $('bDown').hidden = !fly; const jl = fly ? 'UP' : 'JUMP'; if ($('bJump').textContent !== jl) $('bJump').textContent = jl;
     $('bHorn').textContent = player.car && player.car.type === 'police' ? 'SIREN' : 'HORN';
   },
@@ -3518,7 +3526,8 @@ function readInput() {
   I.fromJoy = (!!TOUCH.joy || padMove) && kx === 0 && kz === 0;
   I.mx = kx || TOUCH.jx || PAD.ax[0]; I.mz = kz || -TOUCH.jy || -PAD.ax[1];
   I.sprint = K('ShiftLeft') || K('ShiftRight') || pb(1) > 0.5 || pb(10) > 0.5; I.walk = K('AltLeft');
-  I.aim = rmb || ((TOUCH.btn.bAim || pb(6) > 0.4) && player.state === 'foot');
+  // mobile AIM is a latched toggle (TOUCH.aimOn); right mouse and the controller trigger still hold to aim
+  I.aim = rmb || ((TOUCH.aimOn || pb(6) > 0.4) && player.state === 'foot');
   I.attack = mouseDown || K('ControlLeft') || TOUCH.btn.bAttack || pb(7) > 0.4;
   I.attackPressed = P('Mouse0') || P('ControlLeft') || TOUCH.edges.has('bAttack') || (pb(7) > 0.4 && !((PAD.prev[7] || 0) > 0.4));
   I.jumpPressed = P('Space') || TOUCH.edges.has('bJump') || pp(0);
@@ -3636,10 +3645,26 @@ function initMenus() {
   $('sens').addEventListener('input', e => { SETTINGS.sens = +e.target.value; STORE.set('sens', SETTINGS.sens); });
   $('resume').addEventListener('click', () => GAME.resume());
   $('play').addEventListener('click', () => GAME.start(false));
-  $('apkLink').addEventListener('click', () => { const n = $('apkNote'); n.hidden = false; n.textContent = 'The download opens in a new tab. On your Android phone, open HarborCityHustle.apk and allow installs from unknown apps when asked.'; });
-  if (window.HCH_APK) {
+  // the APK file is hosted on GitHub (downloads/ in the repo, served by GitHub Pages)
+  const APK_URL = 'https://bruceai-hub.github.io/harbor-city-hustle/downloads/HarborCityHustle.apk';
+  const VERSION_URL = 'https://bruceai-hub.github.io/harbor-city-hustle/downloads/version.txt';
+  const APP_VERSION = $('verLbl').textContent.replace(/^v/, '');
+  if (!window.HCH_APK) {
+    $('apkLink').href = APK_URL;
+    $('apkLink').addEventListener('click', () => { const n = $('apkNote'); n.hidden = false; n.textContent = 'Download started. On your Android phone, open HarborCityHustle.apk and allow installs from this browser when asked.'; });
+  } else {
+    // inside the APK the download button becomes an update check against the GitHub version file
     $('apkLink').hidden = true; $('updBtn').hidden = false;
-    $('updBtn').addEventListener('click', () => { const n = $('apkNote'); n.hidden = false; n.textContent = `You have version ${$('verLbl').textContent}. Opening the web version: if its version number is higher, an update is out.`; try { window.HCHAndroid.openUrl('https://claude.ai/artifact/FSU1PaAz1tGLiWbT8Foq3u'); } catch (_) { } });
+    $('updBtn').addEventListener('click', async () => {
+      const n = $('apkNote'); n.hidden = false; n.textContent = 'Checking for updates…';
+      try {
+        const latest = (await (await fetch(VERSION_URL, { cache: 'no-store' })).text()).trim();
+        if (latest === APP_VERSION) { n.textContent = `You have the latest version (v${APP_VERSION}).`; return; }
+        n.textContent = `Version v${latest} is out (you have v${APP_VERSION}). Tap Download to get it.`;
+        const link = $('apkLink'); link.hidden = false; link.textContent = `Download v${latest}`;
+        link.onclick = e => { e.preventDefault(); try { window.HCHAndroid.openUrl(APK_URL); } catch (_) { } };
+      } catch (_) { n.textContent = 'Could not check for updates. Connect to the internet and try again.'; }
+    });
   }
   $('directorBtn').addEventListener('click', () => { const p = $('dirPanel'); p.hidden = !p.hidden; if (!p.hidden) p.scrollIntoView({ block: 'nearest' }); });
   $('dirStart').addEventListener('click', () => GAME.start(true));

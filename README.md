@@ -10,3 +10,5 @@ Shaders (High quality, or Optimization for iPhone): https://bruceai-hub.github.i
 GitHub: https://github.com/BruceAi-hub/harbor-city-hustle
 
 On your phone, open the Play address, then use **Add to Home Screen** (Safari share menu, or Chrome menu > Install app). It then opens full screen and works offline.
+
+Android APK (v1.3): https://bruceai-hub.github.io/harbor-city-hustle/downloads/HarborCityHustle.apk
