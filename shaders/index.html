@@ -240,7 +240,7 @@ kbd{font:700 13px var(--ui);background:#e9e3d6;color:#111;border-radius:4px;padd
       <div class="dirgrid" data-dir></div>
       <div class="row"><button class="big" id="dirStart">Start directing</button></div>
     </div>
-    <div class="row"><span class="lbl">Optimize for iPhone</span><div class="seg" id="modeSeg"><button data-mode="high">High quality</button><button data-mode="opt">Optimization</button></div></div>
+    <div class="row"><span class="lbl">Device</span><div class="seg" id="modeSeg"><button data-mode="high">Nvidia</button><button data-mode="opt">iPhone</button></div></div>
     <div class="ctrls">
       <div>
         <h3>Keyboard &amp; mouse</h3>
@@ -291,7 +291,7 @@ kbd{font:700 13px var(--ui);background:#e9e3d6;color:#111;border-radius:4px;padd
     <h1>Harbor City <span>Hustle</span></h1>
     <div class="row"><button class="big" id="resume">Resume</button></div>
     <div class="dirpanel" id="dirPanel2" hidden><div class="lbl">Director controls</div><div class="dirgrid" data-dir></div></div>
-    <div class="row"><span class="lbl">Optimize for iPhone</span><div class="seg" id="modeSeg2"><button data-mode="high">High quality</button><button data-mode="opt">Optimization</button></div></div>
+    <div class="row"><span class="lbl">Device</span><div class="seg" id="modeSeg2"><button data-mode="high">Nvidia</button><button data-mode="opt">iPhone</button></div></div>
     <div class="row slider"><label class="lbl" for="sens">Look speed</label><input id="sens" type="range" min="0.3" max="2.5" step="0.1"></div>
     <div class="row"><span class="lbl">Sound</span><div class="seg" id="soundSeg"><button data-s="1">On</button><button data-s="0">Off</button></div></div>
     <p class="lede" id="stats"></p>
@@ -304,11 +304,11 @@ import { SSRShader } from './shaders/SSRShader.js';
 import { generateMagicSquareNoise, GTAOShader } from './shaders/GTAOShader.js';
 import { PoissonDenoiseShader } from './shaders/PoissonDenoiseShader.js';
 
-// "Optimize for iPhone": High quality is the default; Optimization is the lighter path.
+// Device modes: "Nvidia" (High quality, the default) and "iPhone" (the lighter path).
 const SHADER_MODES = {
-  high: { label: 'High quality', pr: 2, shadowSize: 4096, shadowR: 60, peds: 40, traffic: 24, far: 520,
+  high: { label: 'Nvidia', pr: 2, shadowSize: 4096, shadowR: 60, peds: 40, traffic: 24, far: 520,
           shadowEvery: 1, castHumans: true, castCars: true, envStep: 0.33, radarEvery: 1, parkR: 130, ssrSteps: 1600 },
-  opt: { label: 'Optimization', pr: 4, shadowSize: 4096, shadowR: 60, peds: 14, traffic: 10, far: 320,
+  opt: { label: 'iPhone', pr: 4, shadowSize: 4096, shadowR: 60, peds: 14, traffic: 10, far: 320,
          shadowEvery: 2, castHumans: false, castCars: false, envStep: 3, radarEvery: 3, parkR: 90, ssrSteps: 64 },
 };
 let BETA_MODE = (() => {
@@ -4067,13 +4067,10 @@ function betaInit() {
   const el = $('betaGpu'); if (el) el.textContent = betaBadgeText();
 }
 function betaBadgeText() {
-  const fast = BETA_MODE === 'opt', is4090 = /4090/.test(BETA.gpu);
-  const dev = is4090 ? 'RTX 4090' : IPHONE ? 'iPhone' : 'Your GPU';
-  const mode = fast ? 'Optimization' : 'High quality';
-  let hint = '';
-  if (!fast && IPHONE) hint = ' · try Optimization for 60 FPS';
-  else if (!fast && !is4090) hint = ' · built for RTX 4090';
-  return `${dev} · ${mode}${hint}`;
+  const iphoneMode = BETA_MODE === 'opt', is4090 = /4090/.test(BETA.gpu);
+  if (iphoneMode) return IPHONE ? 'iPhone mode' : 'iPhone mode (built for iPhone)';
+  if (IPHONE) return 'Nvidia mode (on iPhone, try iPhone mode for 60 FPS)';
+  return is4090 ? 'Nvidia mode · RTX 4090 detected' : 'Nvidia mode (built for RTX 4090)';
 }
 function betaSyncUI() {
   document.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode === BETA_MODE));
@@ -4105,7 +4102,7 @@ function betaApply() {
   betaResize(true);
   onResize();
   betaSyncUI();
-  if (GAME.state !== 'menu' && HUD.el) HUD.toast(BETA_MODE === 'opt' ? 'Optimization on: a little softer, much faster.' : 'High quality on.', 2.5);
+  if (GAME.state !== 'menu' && HUD.el) HUD.toast(BETA_MODE === 'opt' ? 'iPhone mode on: built for a smoother frame rate.' : 'Nvidia mode on: full quality.', 2.5);
 }
 // turn shadows on or off for existing objects; BETA_CAST covers the ones built later
 function betaSetCast(root, on) {
