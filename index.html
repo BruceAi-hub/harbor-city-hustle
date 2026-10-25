@@ -1873,10 +1873,7 @@ const AUDIO = {
       // horn
       this.hornG = c.createGain(); this.hornG.gain.value = 0; for (const f of [392, 494]) { const o = c.createOscillator(); o.type = 'square'; o.frequency.value = f; o.connect(this.hornG); o.start(); }
       const hf = c.createBiquadFilter(); hf.type = 'lowpass'; hf.frequency.value = 1400; this.hornG.connect(hf); hf.connect(this.out);
-      // radio bus
-      this.radioG = c.createGain(); this.radioG.gain.value = 0; const rf = c.createBiquadFilter(); rf.type = 'lowpass'; rf.frequency.value = 5200; this.radioG.connect(rf); rf.connect(this.out);
       this.ok = true;
-      this.renderRadio();
     } catch (e) { this.ok = false; }
   },
   setMuted(m) { if (this.master) this.master.gain.value = m ? 0 : 0.9; },
@@ -1919,39 +1916,7 @@ const AUDIO = {
     this.sirG.gain.setTargetAtTime(sv * 0.07, t, 0.2);
     let hv = car && car.horn > 0 ? 1 : 0; for (const v of vehicles) if (v.horn > 0 && v !== car) hv = Math.max(hv, this.vol(v.pos, 45));
     this.hornG.gain.setTargetAtTime(hv * 0.08, t, 0.02);
-    this.radioG.gain.setTargetAtTime(car && this.radioOn && !car.dead ? 0.22 : 0, t, 0.3);
     this.ambG.gain.setTargetAtTime(car ? 0.02 : 0.05, t, 0.5);
-  },
-  // --- in-car radio: a small synthwave loop, rendered once and looped by the audio thread ---
-  // (the old scheduler ran on the page's frame loop, so a slow frame bunched the notes up or left gaps)
-  renderRadio() {
-    const c = this.ctx, spb = 60 / 104 / 4, len = Math.ceil(64 * spb * c.sampleRate);
-    const off = new OfflineAudioContext(2, len, c.sampleRate), out = off.createGain();
-    out.connect(off.destination);
-    for (let st = 0; st < 64; st++) this.playStep(st, st * spb, off, out);
-    off.oncomplete = e => {
-      const src = c.createBufferSource(); src.buffer = e.renderedBuffer; src.loop = true;
-      src.connect(this.radioG); src.start();
-    };
-    off.startRendering();
-  },
-  playStep(st, t, c = this.ctx, out = this.radioG) {
-    const s16 = st % 16, bar = Math.floor(st / 16);
-    const roots = [45, 41, 48, 43]; // A F C G
-    const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
-    const note = (f, type, dur, g, attack = 0.005, cutoff = 2000) => {
-      const o = c.createOscillator(), gn = c.createGain(), fl = c.createBiquadFilter(); o.type = type; o.frequency.value = f; fl.type = 'lowpass'; fl.frequency.value = cutoff;
-      gn.gain.setValueAtTime(0.0001, t); gn.gain.exponentialRampToValueAtTime(g, t + attack); gn.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      o.connect(fl); fl.connect(gn); gn.connect(out); o.start(t); o.stop(t + dur + 0.05);
-    };
-    if (s16 % 4 === 0) { const o = c.createOscillator(), g = c.createGain(); o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.18); g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.22); o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.25); }
-    if (s16 === 4 || s16 === 12) { const s = c.createBufferSource(); s.buffer = this.noise; const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1800; const g = c.createGain(); g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.18); s.connect(f); f.connect(g); g.connect(out); s.start(t, Math.random()); s.stop(t + 0.2); }
-    if (s16 % 2 === 1) { const s = c.createBufferSource(); s.buffer = this.noise; const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7000; const g = c.createGain(); g.gain.setValueAtTime(0.12, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05); s.connect(f); f.connect(g); g.connect(out); s.start(t, Math.random()); s.stop(t + 0.06); }
-    const r = roots[bar];
-    if (s16 % 2 === 0) note(mtof(r - 12 + (s16 % 8 === 6 ? 12 : 0)), 'sawtooth', 0.2, 0.22, 0.005, 600);
-    const arp = [0, 7, 12, 15, 12, 7, 3, 7][s16 % 8];
-    note(mtof(r + 12 + arp), 'square', 0.12, 0.05, 0.004, 2600);
-    if (s16 === 0) for (const iv of [0, 3, 7]) note(mtof(r + 24 + iv), 'triangle', 1.6, 0.035, 0.2, 1800);
   },
 };
 
