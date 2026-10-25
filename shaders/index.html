@@ -309,7 +309,7 @@ const SHADER_MODES = {
   high: { label: 'High quality', pr: 2, shadowSize: 4096, shadowR: 60, peds: 40, traffic: 24, far: 520,
           shadowEvery: 1, castHumans: true, castCars: true, envStep: 0.33, radarEvery: 1, parkR: 130, ssrSteps: 1600 },
   opt: { label: 'Optimization', pr: 4, shadowSize: 4096, shadowR: 60, peds: 14, traffic: 10, far: 320,
-         shadowEvery: 2, castHumans: false, castCars: false, envStep: 2, radarEvery: 3, parkR: 90, ssrSteps: 1600 },
+         shadowEvery: 2, castHumans: false, castCars: false, envStep: 3, radarEvery: 3, parkR: 90, ssrSteps: 64 },
 };
 let BETA_MODE = (() => {
   try { const m = localStorage.getItem('hch_shaders_mode'); return m in SHADER_MODES ? m : 'high'; } catch (e) { return 'high'; }
@@ -3867,8 +3867,85 @@ void main(){
   gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
 }`;
 
+// Optimization final pass: runs at native resolution. Ambient occlusion and reflections are computed at
+// half resolution and brought back with depth-aware (joint bilateral) upsampling, so object edges stay sharp.
+const BETA_GRADE_OPT_FS = `
+precision highp float;
+uniform sampler2D tColor;
+uniform sampler2D tDepth;
+uniform sampler2D tAO;
+uniform sampler2D tSSR;
+uniform sampler2D tBloom;
+uniform vec2 uHalfRes;
+uniform float uNear;
+uniform float uFar;
+uniform float uNight;
+uniform float uTime;
+varying vec2 vUv;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+float linZ(float d){ float z = d * 2.0 - 1.0; return (2.0 * uNear * uFar) / (uFar + uNear - z * (uFar - uNear)); }
+void main(){
+  // chromatic aberration grows toward the screen edges
+  vec2 dir = vUv - 0.5;
+  float ca = dot(dir, dir) * 0.012;
+  vec3 base = vec3(texture2D(tColor, vUv + dir * ca).r, texture2D(tColor, vUv).g, texture2D(tColor, vUv - dir * ca).b);
+  // joint bilateral upsampling of the half-resolution AO and reflections
+  float zc = linZ(texture2D(tDepth, vUv).x);
+  vec2 hp = vUv * uHalfRes - 0.5;
+  vec2 f = fract(hp);
+  vec2 b = (floor(hp) + 0.5) / uHalfRes;
+  vec2 ds = 1.0 / uHalfRes;
+  float aoSum = 0.0;
+  vec4 refSum = vec4(0.0);
+  float wSum = 0.0;
+  for (int j = 0; j < 2; j++) {
+    for (int i = 0; i < 2; i++) {
+      vec2 uv = b + vec2(float(i), float(j)) * ds;
+      float z = linZ(texture2D(tDepth, uv).x);
+      float w = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
+      w *= exp(-abs(z - zc) / (0.03 * zc + 0.05)) + 1e-4;
+      aoSum += texture2D(tAO, uv).r * w;
+      refSum += texture2D(tSSR, uv) * w;
+      wSum += w;
+    }
+  }
+  float ao = aoSum / wSum;
+  vec4 refl = refSum / wSum;
+  base *= clamp(1.0 - (1.0 - ao) * 2.5, 0.0, 1.0);
+  vec3 col = mix(base, refl.rgb, clamp(refl.a, 0.0, 1.0));
+  // bloom: 16 taps over the half-resolution bright pass
+  vec3 bl = vec3(0.0);
+  for (int k = 0; k < 16; k++) {
+    float fk = float(k);
+    float a = fk * 2.3999632;
+    float r = sqrt((fk + 0.5) / 16.0) * 15.0;
+    bl += texture2D(tBloom, vUv + vec2(cos(a), sin(a)) * r / uHalfRes).rgb * (1.0 - r / 15.0);
+  }
+  bl /= 16.0;
+  col = aces((col + bl * (0.35 + uNight * 0.4)) * 1.05);
+  col = pow(col, vec3(1.0 / 2.2));
+  col *= mix(vec3(1.0), vec3(0.96, 1.0, 1.06), uNight);
+  col *= mix(0.7, 1.0, smoothstep(0.95, 0.25, length(dir) * 1.4));
+  col += (hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5) * 0.025;
+  gl_FragColor = vec4(col, 1.0);
+}`;
+// bright pass for bloom: averages 4 native texels per half-resolution texel, keeps only the highlights
+const BETA_BRIGHT_FS = `
+precision highp float;
+uniform sampler2D tColor;
+uniform vec2 uTexel;
+varying vec2 vUv;
+void main(){
+  vec3 s = texture2D(tColor, vUv + uTexel * vec2(-0.5, -0.5)).rgb
+         + texture2D(tColor, vUv + uTexel * vec2(0.5, -0.5)).rgb
+         + texture2D(tColor, vUv + uTexel * vec2(-0.5, 0.5)).rgb
+         + texture2D(tColor, vUv + uTexel * vec2(0.5, 0.5)).rgb;
+  gl_FragColor = vec4(max(s * 0.25 - 0.85, 0.0), 1.0);
+}`;
+
 const BETA = { w: 0, h: 0, opt: null, gpu: '', type: null, rt: {}, mat: {}, hide: [], quad: null, quadScene: null, quadCam: null, noise: null, depthTex: null, frame: 0, last: 0, acc: 0, n: 0 };
-const BETA_ADAPT = { acc: 0, n: 0 };
+const BETA_ADAPT = { acc: 0, n: 0, level: 0 };
 const _bsz = new THREE.Vector2();
 const IPHONE = /iPhone|iPad/.test(navigator.userAgent);
 
@@ -3957,12 +4034,25 @@ function betaInit() {
   });
   BETA.mat.ssr.uniforms.opacity.value = 0.9;
   BETA.mat.ssr.uniforms.maxDistance.value = 160;
+  // the shorter reflection trace used by Optimization when frames run long (same shader, 32 steps)
+  BETA.mat.ssrFast = BETA.mat.ssr.clone();
+  BETA.mat.ssrFast.defines.MAX_STEP = 32;
   const gradeUniforms = () => ({
     tColor: { value: null }, tSSR: { value: null }, tAO: { value: null },
     uRes: { value: new THREE.Vector2(1, 1) }, uNight: { value: 0 }, uTime: { value: 0 },
   });
   BETA.mat.gradeHigh = new THREE.ShaderMaterial({ defines: { BLOOM_TAPS: 48, BLOOM_R: '22.0' }, uniforms: gradeUniforms(), vertexShader: BETA_GRADE_VS, fragmentShader: BETA_GRADE_FS, depthTest: false, depthWrite: false });
-  BETA.mat.gradeOpt = new THREE.ShaderMaterial({ defines: { BLOOM_TAPS: 16, BLOOM_R: '30.0' }, uniforms: gradeUniforms(), vertexShader: BETA_GRADE_VS, fragmentShader: BETA_GRADE_FS, depthTest: false, depthWrite: false });
+  BETA.mat.gradeOpt = new THREE.ShaderMaterial({
+    uniforms: {
+      tColor: { value: null }, tDepth: { value: null }, tAO: { value: null }, tSSR: { value: null }, tBloom: { value: null },
+      uHalfRes: { value: new THREE.Vector2(1, 1) }, uNear: { value: 0.1 }, uFar: { value: 1200 }, uNight: { value: 0 }, uTime: { value: 0 },
+    },
+    vertexShader: BETA_GRADE_VS, fragmentShader: BETA_GRADE_OPT_FS, depthTest: false, depthWrite: false,
+  });
+  BETA.mat.bright = new THREE.ShaderMaterial({
+    uniforms: { tColor: { value: null }, uTexel: { value: new THREE.Vector2(1, 1) } },
+    vertexShader: BETA_GRADE_VS, fragmentShader: BETA_BRIGHT_FS, depthTest: false, depthWrite: false,
+  });
 
   BETA.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)); BETA.quad.frustumCulled = false;
   BETA.quadScene = new THREE.Scene(); BETA.quadScene.add(BETA.quad);
@@ -4002,6 +4092,7 @@ function betaApply() {
   BETA_CAST.humans = P.castHumans; BETA_CAST.cars = P.castCars;
   Q = { pr: P.pr, shadows: true, shadowSize: P.shadowSize, shadowR: P.shadowR, peds: P.peds, traffic: P.traffic, far: P.far };
   PERF.scale = 1;
+  BETA_ADAPT.level = 0;
   BETA.mat.ssr.defines.MAX_STEP = P.ssrSteps; BETA.mat.ssr.needsUpdate = true;
   applyShadowQuality();
   renderer.shadowMap.autoUpdate = false;
@@ -4042,7 +4133,8 @@ function betaResize(force) {
   if (!force && w === BETA.w && h === BETA.h && opt === BETA.opt && BETA.rt.beauty) return;
   BETA.w = w; BETA.h = h; BETA.opt = opt;
   // every buffer is at native resolution, in both modes (Optimization only cuts draw calls and shadow work)
-  const hw = w, hh = h;
+  // Optimization: half-resolution buffers for ambient occlusion, reflections and bloom; the picture stays native
+  const hw = opt ? Math.ceil(w / 2) : w, hh = opt ? Math.ceil(h / 2) : h;
   for (const k in BETA.rt) BETA.rt[k].dispose();
   BETA.rt = {};
   const lin = { type: BETA.type, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
@@ -4060,9 +4152,11 @@ function betaResize(force) {
   BETA.rt.ao = new THREE.WebGLRenderTarget(hw, hh, lin);
   BETA.rt.pd = new THREE.WebGLRenderTarget(hw, hh, lin);
   BETA.rt.ssr = new THREE.WebGLRenderTarget(hw, hh, lin);
+  BETA.rt.bloom = new THREE.WebGLRenderTarget(hw, hh, lin);
   for (const m of [BETA.mat.gtao, BETA.mat.pd, BETA.mat.ssr]) m.uniforms.resolution.value.set(hw, hh);
   BETA.mat.gradeHigh.uniforms.uRes.value.set(w, h);
-  BETA.mat.gradeOpt.uniforms.uRes.value.set(w, h);
+  BETA.mat.gradeOpt.uniforms.uHalfRes.value.set(hw, hh);
+  BETA.mat.bright.uniforms.uTexel.value.set(1 / w, 1 / h);
   BETA.mat.depthNormal.uniforms.uRes.value.set(w, h);
 }
 function betaPass(mat, target, color, alpha = 1) {
@@ -4108,25 +4202,40 @@ function betaRender() {
   g.cameraProjectionMatrixInverse.value.copy(cam.projectionMatrixInverse);
   g.cameraWorldMatrix.value.copy(cam.matrixWorld);
   g.tNormal.value = normTex; g.tDepth.value = depthTex;
-  betaPass(M.gtao, BETA.rt.ao, 0xffffff);
-  const p = M.pd.uniforms;
-  p.tDiffuse.value = BETA.rt.ao.texture; p.tNormal.value = normTex; p.tDepth.value = depthTex;
-  p.cameraProjectionMatrixInverse.value.copy(cam.projectionMatrixInverse);
-  betaPass(M.pd, BETA.rt.pd, 0xffffff);
+  // Optimization under load: ambient occlusion is refreshed every other frame (it changes slowly)
+  const aoFrame = !opt || BETA_ADAPT.level < 2 || BETA.frame % 2 === 0;
+  if (aoFrame) {
+    betaPass(M.gtao, BETA.rt.ao, 0xffffff);
+    const p = M.pd.uniforms;
+    p.tDiffuse.value = BETA.rt.ao.texture; p.tNormal.value = normTex; p.tDepth.value = depthTex;
+    p.cameraProjectionMatrixInverse.value.copy(cam.projectionMatrixInverse);
+    betaPass(M.pd, BETA.rt.pd, 0xffffff);
+  }
 
-  // 5. reflections (SSRShader)
-  const s = M.ssr.uniforms;
+  // 5. reflections (SSRShader); Optimization under load uses the shorter trace
+  const ssrMat = opt && BETA_ADAPT.level > 0 ? M.ssrFast : M.ssr;
+  const s = ssrMat.uniforms;
   s.tDiffuse.value = BETA.rt.beauty.texture; s.tNormal.value = normTex; s.tDepth.value = depthTex;
   s.cameraNear.value = cam.near; s.cameraFar.value = cam.far;
   s.cameraProjectionMatrix.value.copy(cam.projectionMatrix);
   s.cameraInverseProjectionMatrix.value.copy(cam.projectionMatrixInverse);
-  betaPass(M.ssr, BETA.rt.ssr, 0x000000, 0);
+  betaPass(ssrMat, BETA.rt.ssr, 0x000000, 0);
 
   // 6. combine, bloom, tone map, lens effects -> screen
-  const grade = opt ? M.gradeOpt : M.gradeHigh, q = grade.uniforms;
-  q.tColor.value = BETA.rt.beauty.texture; q.tSSR.value = BETA.rt.ssr.texture; q.tAO.value = BETA.rt.pd.texture;
-  q.uNight.value = NIGHT; q.uTime.value = gameClock % 100;
-  betaPass(grade, null, 0x000000, 1);
+  if (opt) {
+    M.bright.uniforms.tColor.value = BETA.rt.beauty.texture;
+    betaPass(M.bright, BETA.rt.bloom, 0x000000, 1);
+    const o = M.gradeOpt.uniforms;
+    o.tColor.value = BETA.rt.beauty.texture; o.tDepth.value = depthTex;
+    o.tAO.value = BETA.rt.pd.texture; o.tSSR.value = BETA.rt.ssr.texture; o.tBloom.value = BETA.rt.bloom.texture;
+    o.uNear.value = cam.near; o.uFar.value = cam.far; o.uNight.value = NIGHT; o.uTime.value = gameClock % 100;
+    betaPass(M.gradeOpt, null, 0x000000, 1);
+  } else {
+    const q = M.gradeHigh.uniforms;
+    q.tColor.value = BETA.rt.beauty.texture; q.tSSR.value = BETA.rt.ssr.texture; q.tAO.value = BETA.rt.pd.texture;
+    q.uNight.value = NIGHT; q.uTime.value = gameClock % 100;
+    betaPass(M.gradeHigh, null, 0x000000, 1);
+  }
 }
 function betaFps() {
   const now = performance.now();
@@ -4136,14 +4245,16 @@ function betaFps() {
   const fps = Math.round(1000 * BETA.n / BETA.acc); BETA.acc = 0; BETA.n = 0;
   const el = $('betaFps'); if (el) el.textContent = `· ${fps} FPS · ${renderer.getPixelRatio().toFixed(2)}×`;
 }
-// Optimization keeps the frame rate near 60 by lowering the render resolution when frames run long
+// Optimization keeps the picture at native resolution and protects the frame rate instead:
+// level 1 shortens the reflection trace, level 2 also refreshes ambient occlusion every other frame.
+// It only steps up when frames run long, and steps back down when they are comfortably fast.
 function betaAdapt(rdt) {
-  return; // Optimization stays at native resolution, so no automatic downscaling
+  if (BETA_MODE !== 'opt' || GAME.state !== 'play') return;
   BETA_ADAPT.acc += rdt; BETA_ADAPT.n++;
   if (BETA_ADAPT.acc < 1.5) return;
   const avg = BETA_ADAPT.acc / BETA_ADAPT.n; BETA_ADAPT.acc = 0; BETA_ADAPT.n = 0;
-  if (avg > 1 / 52 && PERF.scale > 0.6) { PERF.scale = Math.max(0.6, PERF.scale * 0.85); onResize(); }
-  else if (avg < 1 / 64 && PERF.scale < 1) { PERF.scale = Math.min(1, PERF.scale * 1.12); onResize(); }
+  if (avg > 1 / 55 && BETA_ADAPT.level < 2) BETA_ADAPT.level++;
+  else if (avg < 1 / 63 && BETA_ADAPT.level > 0) BETA_ADAPT.level--;
 }
 
 
