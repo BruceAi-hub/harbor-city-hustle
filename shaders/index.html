@@ -4020,6 +4020,10 @@ function betaInit() {
   });
   BETA.mat.ssr.uniforms.opacity.value = 0.9;
   BETA.mat.ssr.uniforms.maxDistance.value = 160;
+  // iPhone copy: rejects hits that are almost edge-on to the reflected ray. Flat ground and walls
+  // otherwise reflect themselves, which drew horizontal streaks and dashed lines. Nvidia keeps the original test.
+  BETA.mat.ssrOpt = BETA.mat.ssr.clone(); BETA.mat.ssrOpt.defines.MAX_STEP = SHADER_MODES.opt.ssrSteps;
+  BETA.mat.ssrOpt.fragmentShader = BETA.mat.ssr.fragmentShader.replace('if(dot(viewReflectDir,vN)>=0.) continue;', 'if(dot(viewReflectDir,vN)>=-0.2) continue;');
   const gradeUniforms = () => ({
     tColor: { value: null }, tSSR: { value: null }, tAO: { value: null },
     uRes: { value: new THREE.Vector2(1, 1) }, uNight: { value: 0 }, uTime: { value: 0 },
@@ -4128,7 +4132,7 @@ function betaResize(force) {
   BETA.rt.ao = new THREE.WebGLRenderTarget(hw, hh, lin);
   BETA.rt.pd = new THREE.WebGLRenderTarget(hw, hh, lin);
   BETA.rt.ssr = new THREE.WebGLRenderTarget(hw, hh, lin);
-  for (const m of [BETA.mat.gtao, BETA.mat.pd, BETA.mat.ssr]) m.uniforms.resolution.value.set(hw, hh);
+  for (const m of [BETA.mat.gtao, BETA.mat.pd, BETA.mat.ssr, BETA.mat.ssrOpt]) m.uniforms.resolution.value.set(hw, hh);
   BETA.mat.gradeHigh.uniforms.uRes.value.set(w, h);
   BETA.mat.gradeOpt.uniforms.uRes.value.set(w, h);
   BETA.mat.gradeOpt.uniforms.uHalfRes.value.set(hw, hh);
@@ -4183,8 +4187,8 @@ function betaRender() {
   p.cameraProjectionMatrixInverse.value.copy(cam.projectionMatrixInverse);
   betaPass(M.pd, BETA.rt.pd, 0xffffff);
 
-  // 5. reflections (SSRShader), full trace in both modes (MAX_STEP is set in betaApply)
-  const ssrMat = M.ssr;
+  // 5. reflections (SSRShader); iPhone uses its own copy (see betaInit)
+  const ssrMat = opt ? M.ssrOpt : M.ssr;
   const s = ssrMat.uniforms;
   s.tDiffuse.value = BETA.rt.beauty.texture; s.tNormal.value = normTex; s.tDepth.value = depthTex;
   s.cameraNear.value = cam.near; s.cameraFar.value = cam.far;
