@@ -4,6 +4,8 @@ A browser open-world street game you can install to your home screen.
 
 Play: https://bruceai-hub.github.io/harbor-city-hustle/
 
+Web beta (heavy shaders, built for an RTX 5090): https://bruceai-hub.github.io/harbor-city-hustle/beta/
+
 
 GitHub: https://github.com/BruceAi-hub/harbor-city-hustle
 
