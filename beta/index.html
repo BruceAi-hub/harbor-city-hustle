@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><meta name="robots" content="noindex"><title>Harbor City Hustle · Web Beta</title>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><meta name="robots" content="noindex"><script type="importmap">{"imports":{"three":"./three.module.min.js"}}</script><title>Harbor City Hustle · Web Beta (RTX 4090)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&family=Barlow+Condensed:wght@500;600;700;800&display=swap">
@@ -161,11 +161,12 @@ kbd{font:700 13px var(--ui);background:#e9e3d6;color:#111;border-radius:4px;padd
 @media (prefers-reduced-motion:reduce){
   #bigText div,#district,#toast{transition:none}
 }
+.tag{font:700 15px var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--sodium)}
 #betaBadge{position:fixed;top:calc(env(safe-area-inset-top,0px) + 8px);left:50%;transform:translateX(-50%);z-index:20;background:rgba(0,0,0,.72);border:1px solid var(--sodium);border-radius:8px;padding:6px 12px;font:600 14px var(--ui);color:#ffe9b8;max-width:94vw;text-align:center;pointer-events:none}
 #betaBadge b{color:var(--sodium);letter-spacing:.08em}
 </style>
 
-<div id="betaBadge"><b>WEB BETA · RTX 5090 BUILD</b> · <span id="betaGpu">checking GPU…</span></div>
+<div id="betaBadge"><b>WEB BETA · RTX 4090 BUILD</b> · <span id="betaGpu">checking GPU…</span></div>
 <canvas id="game" tabindex="0" aria-label="Harbor City game view"></canvas>
 
 <div class="hud" id="hud" hidden>
@@ -237,10 +238,7 @@ kbd{font:700 13px var(--ui);background:#e9e3d6;color:#111;border-radius:4px;padd
       <div class="dirgrid" data-dir></div>
       <div class="row"><button class="big" id="dirStart">Start directing</button></div>
     </div>
-    <div class="row">
-      <span class="lbl">Graphics</span>
-      <div class="seg" id="qualSeg"><button data-q="low">Low</button><button data-q="medium">Medium</button><button data-q="high">High</button></div>
-    </div>
+    <div class="row"><span class="lbl">Rendering</span><span class="tag">High · Ray tracing on</span></div>
     <div class="ctrls">
       <div>
         <h3>Keyboard &amp; mouse</h3>
@@ -291,7 +289,7 @@ kbd{font:700 13px var(--ui);background:#e9e3d6;color:#111;border-radius:4px;padd
     <h1>Harbor City <span>Hustle</span></h1>
     <div class="row"><button class="big" id="resume">Resume</button></div>
     <div class="dirpanel" id="dirPanel2" hidden><div class="lbl">Director controls</div><div class="dirgrid" data-dir></div></div>
-    <div class="row"><span class="lbl">Graphics</span><div class="seg" id="qualSeg2"><button data-q="low">Low</button><button data-q="medium">Medium</button><button data-q="high">High</button></div></div>
+    <div class="row"><span class="lbl">Rendering</span><span class="tag">High · Ray tracing on</span></div>
     <div class="row slider"><label class="lbl" for="sens">Look speed</label><input id="sens" type="range" min="0.3" max="2.5" step="0.1"></div>
     <div class="row"><span class="lbl">Sound</span><div class="seg" id="soundSeg"><button data-s="1">On</button><button data-s="0">Off</button></div></div>
     <p class="lede" id="stats"></p>
@@ -299,6 +297,9 @@ kbd{font:700 13px var(--ui);background:#e9e3d6;color:#111;border-radius:4px;padd
 </div>
 </head><body>
 <script type="module">
+import { SSRShader } from './shaders/SSRShader.js';
+import { generateMagicSquareNoise, GTAOShader } from './shaders/GTAOShader.js';
+import { PoissonDenoiseShader } from './shaders/PoissonDenoiseShader.js';
 import * as THREE from './three.module.min.js';
 
 // ============================================================
@@ -324,7 +325,7 @@ const STORE = {
   get(k, d) { try { const v = localStorage.getItem('hch_' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('hch_' + k, JSON.stringify(v)); } catch (e) { } }
 };
-const SETTINGS = { quality: STORE.get('quality', IS_TOUCH ? 'medium' : 'high'), sens: STORE.get('sens', 1), sound: STORE.get('sound', true) };
+const SETTINGS = { quality: 'high', sens: STORE.get('sens', 1), sound: STORE.get('sound', true) };
 const QUALS = {
   low: { pr: 1, shadows: false, shadowSize: 1024, shadowR: 30, peds: 12, traffic: 8, far: 230 },
   medium: { pr: 1.5, shadows: true, shadowSize: 1024, shadowR: 34, peds: 18, traffic: 11, far: 290 },
@@ -3608,7 +3609,6 @@ function applyDirector() {
   HUD.dirty = true;
 }
 function syncSettingsUI() {
-  for (const id of ['qualSeg', 'qualSeg2']) for (const b of $(id).children) b.classList.toggle('on', b.dataset.q === SETTINGS.quality);
   for (const b of $('soundSeg').children) b.classList.toggle('on', (b.dataset.s === '1') === !!SETTINGS.sound);
   $('sens').value = SETTINGS.sens;
 }
@@ -3616,7 +3616,6 @@ function setQuality(q) {
   SETTINGS.quality = q; STORE.set('quality', q); Q = QUALS[q]; applyShadowQuality(); onResize(); syncSettingsUI();
 }
 function initMenus() {
-  for (const id of ['qualSeg', 'qualSeg2']) $(id).addEventListener('click', e => { const q = e.target.dataset.q; if (q) setQuality(q); });
   $('soundSeg').addEventListener('click', e => { const s = e.target.dataset.s; if (s == null) return; SETTINGS.sound = s === '1'; STORE.set('sound', SETTINGS.sound); AUDIO.setMuted(!SETTINGS.sound); syncSettingsUI(); });
   $('sens').addEventListener('input', e => { SETTINGS.sens = +e.target.value; STORE.set('sens', SETTINGS.sens); });
   $('resume').addEventListener('click', () => GAME.resume());
@@ -3647,7 +3646,7 @@ function onResize() {
 }
 const PERF = { scale: 1, acc: 0, n: 0, checked: 0 };
 function adaptPerf(rdt) {
-  if (GAME.state !== 'play') return;
+  return; // beta: fixed High quality
   PERF.acc += rdt; PERF.n++;
   if (PERF.acc > 3) {
     const avg = PERF.acc / PERF.n; PERF.acc = 0; PERF.n = 0;
@@ -3751,41 +3750,41 @@ window.__hch = { sim(sec) { const n = Math.round(sec * 30); for (let k = 0; k < 
 
 
 // ============================================================
-//  Web beta (heavy build): 4x MSAA HDR render target, then one
-//  post pass with ambient occlusion, bloom, ACES tone mapping,
-//  chromatic aberration, vignette and film grain.
+//  Web beta (RTX 4090 build): software ray tracing and ambient
+//  occlusion from three.js shaders (MIT, unchanged, see
+//  third_party/three-0.160.0/NOTICE.md), then one grade pass.
+//  Frame order:
+//    1. beauty   scene, 4x MSAA, HDR
+//    2. normal   view-space normals + depth
+//    3. GTAO     ground-truth ambient occlusion (GTAOShader)
+//    4. denoise  Poisson denoise of the AO (PoissonDenoiseShader)
+//    5. SSR      screen-space ray-traced reflections (SSRShader)
+//    6. grade    reflections + AO + bloom + tone map + lens effects
 // ============================================================
-const BETA_VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
-const BETA_FS = `
+const BETA_GRADE_VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const BETA_GRADE_FS = `
 precision highp float;
 uniform sampler2D tColor;
-uniform sampler2D tDepth;
+uniform sampler2D tSSR;
+uniform sampler2D tAO;
 uniform vec2 uRes;
-uniform float uNear;
-uniform float uFar;
 uniform float uNight;
 uniform float uTime;
 varying vec2 vUv;
-float linZ(float d){ float z = d * 2.0 - 1.0; return (2.0 * uNear * uFar) / (uFar + uNear - z * (uFar - uNear)); }
 float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 void main(){
   vec2 px = 1.0 / uRes;
-  vec3 c = texture2D(tColor, vUv).rgb;
-  float z0 = linZ(texture2D(tDepth, vUv).r);
-  // ambient occlusion: 32 depth taps in a golden-angle spiral, rotated per pixel
-  float rot = hash(gl_FragCoord.xy + uTime) * 6.2831853;
-  float occ = 0.0;
-  for (int i = 0; i < 32; i++) {
-    float fi = float(i);
-    float a = rot + fi * 2.3999632;
-    float r = sqrt((fi + 0.5) / 32.0) * 14.0;
-    float zs = linZ(texture2D(tDepth, vUv + vec2(cos(a), sin(a)) * r * px).r);
-    float diff = z0 - zs;
-    occ += smoothstep(0.2, 1.5, diff) * (1.0 - smoothstep(1.5, 6.0, diff));
-  }
-  float ao = clamp(1.0 - occ / 32.0 * 1.6, 0.0, 1.0);
-  // bloom: 48 colour taps, only the bright parts (lamps, neon, headlights, explosions)
+  // chromatic aberration grows toward the screen edges
+  vec2 dir = vUv - 0.5;
+  float ca = dot(dir, dir) * 0.012;
+  vec3 base = vec3(texture2D(tColor, vUv + dir * ca).r, texture2D(tColor, vUv).g, texture2D(tColor, vUv - dir * ca).b);
+  // AO strength: the denoised AO is subtle, so push the occlusion up a little
+  base *= clamp(1.0 - (1.0 - texture2D(tAO, vUv).r) * 2.5, 0.0, 1.0);
+  // SSRShader output: rgb = traced reflection colour, a = reflection strength
+  vec4 refl = texture2D(tSSR, vUv);
+  vec3 col = mix(base, refl.rgb, clamp(refl.a, 0.0, 1.0));
+  // bloom: 48 taps over the bright parts (lamps, neon, headlights, explosions)
   vec3 bl = vec3(0.0);
   for (int i = 0; i < 48; i++) {
     float fi = float(i);
@@ -3795,13 +3794,7 @@ void main(){
     bl += max(s - 0.85, 0.0) * (1.0 - r / 22.0);
   }
   bl /= 48.0;
-  // chromatic aberration grows toward the screen edges
-  vec2 dir = vUv - 0.5;
-  float ca = dot(dir, dir) * 0.012;
-  vec3 col = vec3(texture2D(tColor, vUv + dir * ca).r, c.g, texture2D(tColor, vUv - dir * ca).b);
-  col *= mix(1.0, ao, 0.75);
-  col += bl * (0.35 + uNight * 0.4);
-  col = aces(col * 1.05);
+  col = aces((col + bl * (0.35 + uNight * 0.4)) * 1.05);
   col = pow(col, vec3(1.0 / 2.2));
   col *= mix(vec3(1.0), vec3(0.96, 1.0, 1.06), uNight);
   col *= mix(0.7, 1.0, smoothstep(0.95, 0.25, length(dir) * 1.4));
@@ -3809,43 +3802,143 @@ void main(){
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-const BETA = { rt: null, type: null, mat: null, scene: null, cam: null, u: null, gpu: '', w: 0, h: 0 };
+const BETA = { w: 0, h: 0, gpu: '', type: null, rt: {}, mat: {}, hide: [], quad: null, quadScene: null, quadCam: null, noise: null };
 const _bsz = new THREE.Vector2();
+
+// random per-pixel rotation texture for the denoiser
+function betaNoise(size) {
+  const d = new Uint8Array(size * size * 4);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 256 | 0;
+  const t = new THREE.DataTexture(d, size, size, THREE.RGBAFormat);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true;
+  return t;
+}
 function betaInit() {
   const gl = renderer.getContext(), dbg = gl.getExtension('WEBGL_debug_renderer_info');
   BETA.gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
   BETA.type = gl.getExtension('EXT_color_buffer_float') ? THREE.HalfFloatType : THREE.UnsignedByteType;
-  BETA.u = { tColor: { value: null }, tDepth: { value: null }, uRes: { value: new THREE.Vector2(1, 1) }, uNear: { value: 0.1 }, uFar: { value: 1200 }, uNight: { value: 0 }, uTime: { value: 0 } };
-  BETA.mat = new THREE.ShaderMaterial({ uniforms: BETA.u, vertexShader: BETA_VS, fragmentShader: BETA_FS, depthTest: false, depthWrite: false });
-  BETA.scene = new THREE.Scene(); BETA.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), BETA.mat));
-  BETA.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  BETA.noise = betaNoise(64);
+
+  BETA.mat.normal = new THREE.MeshNormalMaterial();
+
+  BETA.mat.gtao = new THREE.ShaderMaterial({
+    defines: Object.assign({}, GTAOShader.defines), uniforms: THREE.UniformsUtils.clone(GTAOShader.uniforms),
+    vertexShader: GTAOShader.vertexShader, fragmentShader: GTAOShader.fragmentShader,
+    blending: THREE.NoBlending, depthTest: false, depthWrite: false,
+  });
+  const gu = BETA.mat.gtao.uniforms;
+  gu.tNoise.value = generateMagicSquareNoise();
+  gu.radius.value = 3.0; gu.distanceFallOff.value = 1.5; gu.thickness.value = 1.0; gu.scale.value = 1.5;
+
+  BETA.mat.pd = new THREE.ShaderMaterial({
+    defines: Object.assign({}, PoissonDenoiseShader.defines), uniforms: THREE.UniformsUtils.clone(PoissonDenoiseShader.uniforms),
+    vertexShader: PoissonDenoiseShader.vertexShader, fragmentShader: PoissonDenoiseShader.fragmentShader,
+    depthTest: false, depthWrite: false,
+  });
+  const pu = BETA.mat.pd.uniforms;
+  pu.tNoise.value = BETA.noise; pu.lumaPhi.value = 10; pu.depthPhi.value = 2; pu.normalPhi.value = 3; pu.radius.value = 8;
+
+  BETA.mat.ssr = new THREE.ShaderMaterial({
+    defines: Object.assign({}, SSRShader.defines), uniforms: THREE.UniformsUtils.clone(SSRShader.uniforms),
+    vertexShader: SSRShader.vertexShader,
+    // SSRShader only writes gl_FragColor on a hit; clear it first so misses are transparent
+    fragmentShader: SSRShader.fragmentShader.replace('void main(){', 'void main(){ gl_FragColor = vec4(0.0);'),
+    blending: THREE.NoBlending, depthTest: false, depthWrite: false,
+  });
+  BETA.mat.ssr.uniforms.opacity.value = 0.9;
+  BETA.mat.ssr.uniforms.maxDistance.value = 160;
+
+  BETA.mat.grade = new THREE.ShaderMaterial({
+    uniforms: {
+      tColor: { value: null }, tSSR: { value: null }, tAO: { value: null },
+      uRes: { value: new THREE.Vector2(1, 1) }, uNight: { value: 0 }, uTime: { value: 0 },
+    },
+    vertexShader: BETA_GRADE_VS, fragmentShader: BETA_GRADE_FS, depthTest: false, depthWrite: false,
+  });
+
+  BETA.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)); BETA.quad.frustumCulled = false;
+  BETA.quadScene = new THREE.Scene(); BETA.quadScene.add(BETA.quad);
+  BETA.quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  BETA.hide = [starPts, FX.soft.pts, FX.glow.pts, ...FX.tracers.map(t => t.l)];
+
   betaResize();
   const badge = $('betaGpu');
-  const name = !BETA.gpu ? 'Unknown GPU' : BETA.gpu.length > 40 ? 'your GPU' : BETA.gpu;
-  if (badge) badge.textContent = /5090/.test(BETA.gpu)
-    ? `${name}. Full beta quality.`
-    : `${name}. This build is tuned for an RTX 5090, so expect low frame rates. Resolution adapts to keep it playable.`;
+  if (badge) {
+    badge.textContent = /4090/.test(BETA.gpu)
+      ? 'RTX 4090 detected. Full beta quality.'
+      : 'Built for an RTX 4090. Your GPU is not one, so expect low frame rates.';
+  }
 }
 function betaResize() {
-  if (!BETA.u) return;
+  if (!BETA.mat.grade) return;
   renderer.getDrawingBufferSize(_bsz);
   const w = Math.max(1, _bsz.x | 0), h = Math.max(1, _bsz.y | 0);
-  if (BETA.rt && w === BETA.w && h === BETA.h) return;
-  if (BETA.rt) BETA.rt.dispose();
+  if (w === BETA.w && h === BETA.h && BETA.rt.beauty) return;
   BETA.w = w; BETA.h = h;
-  const dt = new THREE.DepthTexture(w, h); dt.type = THREE.UnsignedIntType;
-  BETA.rt = new THREE.WebGLRenderTarget(w, h, { samples: 4, type: BETA.type, depthBuffer: true, depthTexture: dt });
-  BETA.u.uRes.value.set(w, h);
+  for (const k in BETA.rt) BETA.rt[k].dispose();
+
+  const linear = { type: BETA.type, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
+  const depth = new THREE.DepthTexture(w, h);
+  depth.format = THREE.DepthStencilFormat; depth.type = THREE.UnsignedInt248Type;
+  BETA.rt.beauty = new THREE.WebGLRenderTarget(w, h, Object.assign({ samples: 4, depthBuffer: true }, linear));
+  BETA.rt.normal = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthTexture: depth });
+  BETA.rt.ao = new THREE.WebGLRenderTarget(w, h, linear);
+  BETA.rt.pd = new THREE.WebGLRenderTarget(w, h, linear);
+  BETA.rt.ssr = new THREE.WebGLRenderTarget(w, h, linear);
+
+  BETA.mat.gtao.uniforms.resolution.value.set(w, h);
+  BETA.mat.pd.uniforms.resolution.value.set(w, h);
+  BETA.mat.ssr.uniforms.resolution.value.set(w, h);
+  BETA.mat.ssr.defines.MAX_STEP = Math.min(1600, Math.ceil(Math.sqrt(w * w + h * h)));
+  BETA.mat.ssr.needsUpdate = true;
+  BETA.mat.grade.uniforms.uRes.value.set(w, h);
+}
+function betaPass(mat, target, color, alpha = 1) {
+  renderer.setClearColor(color, alpha);
+  renderer.setRenderTarget(target);
+  BETA.quad.material = mat;
+  renderer.render(BETA.quadScene, BETA.quadCam);
 }
 function betaRender() {
-  if (!BETA.rt) { renderer.render(scene, camera); return; }
-  renderer.setRenderTarget(BETA.rt);
+  if (!BETA.rt.beauty) { renderer.render(scene, camera); return; }
+  const M = BETA.mat, cam = camera;
+
+  renderer.setClearColor(0x000000, 1);
+  renderer.setRenderTarget(BETA.rt.beauty);
   renderer.render(scene, camera);
-  renderer.setRenderTarget(null);
-  BETA.u.tColor.value = BETA.rt.texture; BETA.u.tDepth.value = BETA.rt.depthTexture;
-  BETA.u.uNear.value = camera.near; BETA.u.uFar.value = camera.far;
-  BETA.u.uNight.value = NIGHT; BETA.u.uTime.value = gameClock % 100;
-  renderer.render(BETA.scene, BETA.cam);
+
+  for (const o of BETA.hide) o.visible = false;
+  scene.overrideMaterial = M.normal;
+  renderer.setClearColor(0x7777ff, 1);
+  renderer.setRenderTarget(BETA.rt.normal);
+  renderer.render(scene, camera);
+  scene.overrideMaterial = null;
+  for (const o of BETA.hide) o.visible = true;
+
+  const g = M.gtao.uniforms;
+  g.cameraNear.value = cam.near; g.cameraFar.value = cam.far;
+  g.cameraProjectionMatrix.value.copy(cam.projectionMatrix);
+  g.cameraProjectionMatrixInverse.value.copy(cam.projectionMatrixInverse);
+  g.cameraWorldMatrix.value.copy(cam.matrixWorld);
+  g.tNormal.value = BETA.rt.normal.texture; g.tDepth.value = BETA.rt.normal.depthTexture;
+  betaPass(M.gtao, BETA.rt.ao, 0xffffff);
+
+  const p = M.pd.uniforms;
+  p.tDiffuse.value = BETA.rt.ao.texture; p.tNormal.value = BETA.rt.normal.texture; p.tDepth.value = BETA.rt.normal.depthTexture;
+  p.cameraProjectionMatrixInverse.value.copy(cam.projectionMatrixInverse);
+  betaPass(M.pd, BETA.rt.pd, 0xffffff);
+
+  const s = M.ssr.uniforms;
+  s.tDiffuse.value = BETA.rt.beauty.texture; s.tNormal.value = BETA.rt.normal.texture; s.tDepth.value = BETA.rt.normal.depthTexture;
+  s.cameraNear.value = cam.near; s.cameraFar.value = cam.far;
+  s.cameraProjectionMatrix.value.copy(cam.projectionMatrix);
+  s.cameraInverseProjectionMatrix.value.copy(cam.projectionMatrixInverse);
+  betaPass(M.ssr, BETA.rt.ssr, 0x000000, 0);
+
+  const q = M.grade.uniforms;
+  q.tColor.value = BETA.rt.beauty.texture; q.tSSR.value = BETA.rt.ssr.texture; q.tAO.value = BETA.rt.pd.texture;
+  q.uNight.value = NIGHT; q.uTime.value = gameClock % 100;
+  betaPass(M.grade, null, 0x000000, 1);
 }
 
 </script></body></html>
