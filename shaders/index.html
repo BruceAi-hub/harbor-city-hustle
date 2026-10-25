@@ -3932,7 +3932,6 @@ void main(){
 }`;
 
 const BETA = { w: 0, h: 0, opt: null, gpu: '', type: null, rt: {}, mat: {}, hide: [], quad: null, quadScene: null, quadCam: null, noise: null, depthTex: null, frame: 0, last: 0, acc: 0, n: 0 };
-const BETA_ADAPT = { acc: 0, n: 0, level: 0 };
 const _bsz = new THREE.Vector2();
 const IPHONE = /iPhone|iPad/.test(navigator.userAgent);
 
@@ -4021,9 +4020,6 @@ function betaInit() {
   });
   BETA.mat.ssr.uniforms.opacity.value = 0.9;
   BETA.mat.ssr.uniforms.maxDistance.value = 160;
-  // shorter reflection traces, used by iPhone mode only when frames run long (reflections stay soft)
-  BETA.mat.ssrMid = BETA.mat.ssr.clone(); BETA.mat.ssrMid.defines.MAX_STEP = 60;
-  BETA.mat.ssrLow = BETA.mat.ssr.clone(); BETA.mat.ssrLow.defines.MAX_STEP = 30;
   const gradeUniforms = () => ({
     tColor: { value: null }, tSSR: { value: null }, tAO: { value: null },
     uRes: { value: new THREE.Vector2(1, 1) }, uNight: { value: 0 }, uTime: { value: 0 },
@@ -4073,7 +4069,6 @@ function betaApply() {
   BETA_CAST.humans = P.castHumans; BETA_CAST.cars = P.castCars;
   Q = { pr: P.pr, shadows: true, shadowSize: P.shadowSize, shadowR: P.shadowR, peds: P.peds, traffic: P.traffic, far: P.far };
   PERF.scale = 1;
-  BETA_ADAPT.level = 0;
   BETA.mat.ssr.defines.MAX_STEP = P.ssrSteps; BETA.mat.ssr.needsUpdate = true;
   applyShadowQuality();
   renderer.shadowMap.autoUpdate = false;
@@ -4188,8 +4183,8 @@ function betaRender() {
   p.cameraProjectionMatrixInverse.value.copy(cam.projectionMatrixInverse);
   betaPass(M.pd, BETA.rt.pd, 0xffffff);
 
-  // 5. reflections (SSRShader); iPhone mode shortens the trace when frames run long
-  const ssrMat = opt ? [M.ssr, M.ssrMid, M.ssrLow][BETA_ADAPT.level] : M.ssr;
+  // 5. reflections (SSRShader), full trace in both modes (MAX_STEP is set in betaApply)
+  const ssrMat = M.ssr;
   const s = ssrMat.uniforms;
   s.tDiffuse.value = BETA.rt.beauty.texture; s.tNormal.value = normTex; s.tDepth.value = depthTex;
   s.cameraNear.value = cam.near; s.cameraFar.value = cam.far;
@@ -4218,16 +4213,9 @@ function betaFps() {
   const fps = Math.round(1000 * BETA.n / BETA.acc); BETA.acc = 0; BETA.n = 0;
   const el = $('betaFps'); if (el) el.textContent = `· ${fps} FPS · ${renderer.getPixelRatio().toFixed(2)}×`;
 }
-// iPhone mode protects the frame rate by shortening the reflection trace when frames run long.
-// The picture itself always stays at full resolution.
-function betaAdapt(rdt) {
-  if (BETA_MODE !== 'opt' || GAME.state !== 'play') return;
-  BETA_ADAPT.acc += rdt; BETA_ADAPT.n++;
-  if (BETA_ADAPT.acc < 1.5) return;
-  const avg = BETA_ADAPT.acc / BETA_ADAPT.n; BETA_ADAPT.acc = 0; BETA_ADAPT.n = 0;
-  if (avg > 1 / 55 && BETA_ADAPT.level < 2) BETA_ADAPT.level++;
-  else if (avg < 1 / 63 && BETA_ADAPT.level > 0) BETA_ADAPT.level--;
-}
+// Stands in for the game's old resolution governor (adaptPerf). It does nothing on purpose:
+// shortening the reflection trace made the reflections disappear, so iPhone mode keeps the full trace.
+function betaAdapt() {}
 
 
 </script></body></html>
