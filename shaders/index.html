@@ -307,8 +307,8 @@ import { PoissonDenoiseShader } from './shaders/PoissonDenoiseShader.js';
 const SHADER_MODES = {
   high: { label: 'High quality', pr: 2, shadowSize: 4096, shadowR: 60, peds: 40, traffic: 24, far: 520,
           shadowEvery: 1, castHumans: true, castCars: true, envStep: 0.33, radarEvery: 1, parkR: 130, ssrSteps: 1600 },
-  opt: { label: 'Optimization', pr: 1.5, shadowSize: 1024, shadowR: 36, peds: 14, traffic: 10, far: 320,
-         shadowEvery: 2, castHumans: false, castCars: false, envStep: 2, radarEvery: 3, parkR: 90, ssrSteps: 120 },
+  opt: { label: 'Optimization', pr: 4, shadowSize: 4096, shadowR: 60, peds: 14, traffic: 10, far: 320,
+         shadowEvery: 2, castHumans: false, castCars: false, envStep: 2, radarEvery: 3, parkR: 90, ssrSteps: 1600 },
 };
 let BETA_MODE = (() => {
   try { const m = localStorage.getItem('hch_shaders_mode'); return m in SHADER_MODES ? m : 'high'; } catch (e) { return 'high'; }
@@ -4016,7 +4016,8 @@ function betaResize(force) {
   const w = Math.max(1, _bsz.x | 0), h = Math.max(1, _bsz.y | 0), opt = BETA_MODE === 'opt';
   if (!force && w === BETA.w && h === BETA.h && opt === BETA.opt && BETA.rt.beauty) return;
   BETA.w = w; BETA.h = h; BETA.opt = opt;
-  const hw = opt ? Math.max(1, Math.round(w / 2)) : w, hh = opt ? Math.max(1, Math.round(h / 2)) : h;
+  // every buffer is at native resolution, in both modes (Optimization only cuts draw calls and shadow work)
+  const hw = w, hh = h;
   for (const k in BETA.rt) BETA.rt[k].dispose();
   BETA.rt = {};
   const lin = { type: BETA.type, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
@@ -4112,7 +4113,7 @@ function betaFps() {
 }
 // Optimization keeps the frame rate near 60 by lowering the render resolution when frames run long
 function betaAdapt(rdt) {
-  if (BETA_MODE !== 'opt' || GAME.state !== 'play') return;
+  return; // Optimization stays at native resolution, so no automatic downscaling
   BETA_ADAPT.acc += rdt; BETA_ADAPT.n++;
   if (BETA_ADAPT.acc < 1.5) return;
   const avg = BETA_ADAPT.acc / BETA_ADAPT.n; BETA_ADAPT.acc = 0; BETA_ADAPT.n = 0;
