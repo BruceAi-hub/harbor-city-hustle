@@ -1883,8 +1883,8 @@ const AUDIO = {
       const hf = c.createBiquadFilter(); hf.type = 'lowpass'; hf.frequency.value = 1400; this.hornG.connect(hf); hf.connect(this.out);
       // radio bus
       this.radioG = c.createGain(); this.radioG.gain.value = 0; const rf = c.createBiquadFilter(); rf.type = 'lowpass'; rf.frequency.value = 5200; this.radioG.connect(rf); rf.connect(this.out);
-      this.ok = true; this.step = 0; this.nextT = c.currentTime + 0.1;
-      setInterval(() => this.schedule(), 40);
+      this.ok = true;
+      this.renderRadio();
     } catch (e) { this.ok = false; }
   },
   setMuted(m) { if (this.master) this.master.gain.value = m ? 0 : 0.9; },
@@ -1930,14 +1930,21 @@ const AUDIO = {
     this.radioG.gain.setTargetAtTime(car && this.radioOn && !car.dead ? 0.22 : 0, t, 0.3);
     this.ambG.gain.setTargetAtTime(car ? 0.02 : 0.05, t, 0.5);
   },
-  // --- in-car radio: a small synthwave sequencer ---
-  schedule() {
-    if (!this.ok || this.radioG.gain.value < 0.001 && !(player.state === 'car' && this.radioOn)) { this.nextT = this.ctx.currentTime + 0.05; return; }
-    const c = this.ctx, spb = 60 / 104 / 4;
-    while (this.nextT < c.currentTime + 0.2) { this.playStep(this.step, this.nextT); this.step = (this.step + 1) % 64; this.nextT += spb; }
+  // --- in-car radio: a small synthwave loop, rendered once and looped by the audio thread ---
+  // (the old scheduler ran on the page's frame loop, so a slow frame bunched the notes up or left gaps)
+  renderRadio() {
+    const c = this.ctx, spb = 60 / 104 / 4, len = Math.ceil(64 * spb * c.sampleRate);
+    const off = new OfflineAudioContext(2, len, c.sampleRate), out = off.createGain();
+    out.connect(off.destination);
+    for (let st = 0; st < 64; st++) this.playStep(st, st * spb, off, out);
+    off.oncomplete = e => {
+      const src = c.createBufferSource(); src.buffer = e.renderedBuffer; src.loop = true;
+      src.connect(this.radioG); src.start();
+    };
+    off.startRendering();
   },
-  playStep(st, t) {
-    const c = this.ctx, out = this.radioG, s16 = st % 16, bar = Math.floor(st / 16);
+  playStep(st, t, c = this.ctx, out = this.radioG) {
+    const s16 = st % 16, bar = Math.floor(st / 16);
     const roots = [45, 41, 48, 43]; // A F C G
     const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
     const note = (f, type, dur, g, attack = 0.005, cutoff = 2000) => {
