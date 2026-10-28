@@ -4160,22 +4160,65 @@ function xrSurrender(dt) {
 function xrVisuals() {
   if (XR.vis) return;
   const root = new THREE.Group(); root.name = 'xr'; scene.add(root);
-  const skin = new THREE.MeshStandardMaterial({ color: 0xd29a6f, roughness: 0.7 }), glove = new THREE.MeshStandardMaterial({ color: 0x2b2f38, roughness: 0.6 });
+  const skin = new THREE.MeshStandardMaterial({ color: 0xd29a6f, roughness: 0.7 }), glove = new THREE.MeshStandardMaterial({ color: 0x3a4150, roughness: 0.6 }), pad = new THREE.MeshStandardMaterial({ color: 0xb9bec6, roughness: 0.45 }), cuff = new THREE.MeshStandardMaterial({ color: 0x454c5a, roughness: 0.85 });
   const joints = {}, gloves = {}, guns = {};
   const sph = new THREE.SphereGeometry(1, 10, 8);
   for (const side of ['left', 'right']) {
     const im = new THREE.InstancedMesh(sph, skin, XR_JOINTS.length); im.frustumCulled = false; root.add(im); joints[side] = im;
-    const g = new THREE.Group(), cap = (r, l) => new THREE.CapsuleGeometry(r, l, 3, 8);
-    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.026, 0.085), glove); palm.position.set(0, 0, 0.02);
-    const fing = new THREE.Group(); fing.name = 'fingers'; fing.position.set(0, 0, -0.03);
-    for (let k = 0; k < 4; k++) { const f = new THREE.Mesh(cap(0.0085, 0.05), glove); f.rotation.x = Math.PI / 2; f.position.set(-0.027 + k * 0.018, 0, -0.03 + (k === 0 || k === 3 ? 0.006 : 0)); fing.add(f); }
-    const thumb = new THREE.Mesh(cap(0.01, 0.04), glove); thumb.rotation.set(Math.PI / 2, 0, side === 'left' ? -0.7 : 0.7); thumb.position.set(side === 'left' ? 0.045 : -0.045, 0.004, 0.0);
-    g.add(palm, fing, thumb); root.add(g); gloves[side] = g;
+    gloves[side] = xrGlove(glove, cuff, pad, side); root.add(gloves[side]);
     guns[side] = {};
   }
   XR.vis = { root, joints, gloves, guns, weapons: {}, mat: { skin, glove } };
   XR.panel = xrPanel(1.05, 0.525, 1024, 512); root.add(XR.panel.mesh);
   XR.wrist = xrPanel(0.17, 0.105, 512, 320); root.add(XR.wrist.mesh);
+}
+// Grip space (WebXR): the handle runs along Z with the thumb end at -Z, +Y points back down the arm,
+// and the back of the right hand faces +X. The right glove is modelled in it; the left one is its mirror.
+const XR_FINGERS = [ // z across the handle, phalanx lengths, radius
+  { z: -0.026, L: [0.040, 0.025, 0.019], r: 0.0085 }, { z: -0.008, L: [0.044, 0.028, 0.02], r: 0.009 },
+  { z: 0.01, L: [0.041, 0.027, 0.019], r: 0.0085 }, { z: 0.027, L: [0.033, 0.02, 0.017], r: 0.0075 }];
+const XR_CURL_OPEN = [0.15, 0.2, 0.1], XR_CURL_FIST = [0.83, 1.34, 0.88]; // bend at each knuckle, radians
+const XR_THUMB = { base: new THREE.Vector3(0.02, 0.05, -0.03), L: [0.04, 0.032, 0.022],
+  rest: [new THREE.Vector3(-0.36, -0.88, -0.31), new THREE.Vector3(-0.8, -0.6, -0.05), new THREE.Vector3(-0.7, -0.7, 0.1)].map(v => v.normalize()),
+  up: [new THREE.Vector3(-0.3, -0.75, -0.6), new THREE.Vector3(-0.2, -0.15, -0.97), new THREE.Vector3(-0.1, -0.05, -1)].map(v => v.normalize()) };
+function xrGlove(mat, cuffMat, padMat, side) {
+  const g = new THREE.Group(), cap = (r, l) => { const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, l, 3, 10), mat); m.len = l; g.add(m); return m; };
+  const palm = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.07, 0.078), mat); palm.position.set(0.03, 0.033, -0.001); g.add(palm);
+  const knuckles = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.056, 3, 10), mat); knuckles.rotation.x = Math.PI / 2; knuckles.position.set(0.029, 0.002, 0); g.add(knuckles);
+  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.026, 0.035, 14), cuffMat); cuff.position.set(0.026, 0.083, 0); cuff.scale.set(0.8, 1, 1.15); g.add(cuff);
+  // the controller itself: the handle in your fist and the button face under your thumb
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.016, 0.08, 16), padMat); handle.rotation.x = Math.PI / 2; handle.position.set(0, 0, 0.005); g.add(handle);
+  const face = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.026, 0.011, 20), padMat); face.rotation.x = Math.PI / 2; face.position.set(-0.004, -0.006, -0.04); g.add(face);
+  const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.012, 10), cuffMat); stick.rotation.x = Math.PI / 2; stick.position.set(-0.008, -0.012, -0.05); g.add(stick); g.pad = [handle, face, stick];
+  g.fingers = XR_FINGERS.map(f => f.L.map(l => cap(f.r, l)));
+  g.thumb = XR_THUMB.L.map(l => cap(0.0098, l));
+  if (side === 'left') g.scale.x = -1; // a mirror image; three.js flips the face winding for it
+  g.curl = [0.5, 0.5]; g.thumbUp = 0;
+  return g;
+}
+const _xg = new THREE.Vector3(), _xg2 = new THREE.Vector3(), _xY = new THREE.Vector3(0, 1, 0);
+function xrBone(m, from, dir) { // capsule from a point along a unit direction; returns the far end in _xg2
+  _xg2.copy(from).addScaledVector(dir, m.len);
+  m.position.addVectors(from, _xg2).multiplyScalar(0.5); m.quaternion.setFromUnitVectors(_xY, dir);
+  return _xg2;
+}
+// fingers follow the grip and trigger (and lift off when you are not touching them), the thumb rises when it is off the buttons
+function xrPoseGlove(g, h, dt) {
+  const b = h.gp ? h.gp.buttons : [], touched = k => !b[k] || b[k].touched !== false || (b[k].value || 0) > 0.05;
+  const idx = touched(0) ? 0.62 + 0.38 * (b[0] ? b[0].value : 0) : 0.2, rest = 0.72 + 0.28 * (b[1] ? b[1].value : 0);
+  const thumbOn = [3, 4, 5, 6].some(k => b[k] && (b[k].touched || b[k].value > 0.05)) || Math.abs(h.ax[0]) + Math.abs(h.ax[1]) > 0.1;
+  const k = 1 - Math.exp(-18 * dt);
+  g.curl[0] += (idx - g.curl[0]) * k; g.curl[1] += (rest - g.curl[1]) * k; g.thumbUp += ((thumbOn ? 0 : 1) - g.thumbUp) * k;
+  XR_FINGERS.forEach((f, i) => {
+    const c = i === 0 ? g.curl[0] : g.curl[1]; let a = 0;
+    _xg.set(0.028, 0.002, f.z);
+    for (let j = 0; j < 3; j++) {
+      a += XR_CURL_OPEN[j] + (XR_CURL_FIST[j] - XR_CURL_OPEN[j]) * c;
+      _xa.set(-Math.sin(a), -Math.cos(a), 0); _xg.copy(xrBone(g.fingers[i][j], _xg, _xa));
+    }
+  });
+  _xg.copy(XR_THUMB.base);
+  for (let j = 0; j < 3; j++) { _xa.lerpVectors(XR_THUMB.rest[j], XR_THUMB.up[j], g.thumbUp).normalize(); _xg.copy(xrBone(g.thumb[j], _xg, _xa)); }
 }
 function xrWeaponMesh(kind) {
   if (XR.vis.weapons[kind]) return XR.vis.weapons[kind];
@@ -4242,15 +4285,16 @@ function xrDraw(dt) {
       XR_JOINTS.forEach((n, k) => { _xa.copy(h.J[n]).applyMatrix4(XR.W); const r = n.endsWith('tip') ? 0.008 : n === 'wrist' ? 0.016 : 0.011; _xm.compose(_xa, XR.Wq, _xb.set(r, r, r)); im.setMatrixAt(k, _xm); });
       im.instanceMatrix.needsUpdate = true;
     }
-    if (gl.visible) { gl.position.copy(h.posW); gl.quaternion.copy(h.qW); const f = gl.getObjectByName('fingers'); f.rotation.x = h.shape.fist ? 1.4 : 0.15; f.position.y = h.shape.fist ? -0.012 : 0; }
+    if (gl.visible) { gl.position.copy(h.posW); gl.quaternion.copy(h.qW); xrPoseGlove(gl, h, dt); for (const c of gl.pad) c.visible = true; } // the controller shows unless a gun is in that hand
   }
   // weapon in the right hand: held with controllers, drawn into a finger gun with hand tracking
   for (const k in V.weapons) V.weapons[k].visible = false;
   const R = XR.hands.right, w = player.weapon;
   if (R && R.ok && player.state === 'foot' && !paused) {
     if (R.kind === 'ctrl' && w !== 'fist') { // the barrel follows the aim ray, so what you see is where you shoot
-      const m = xrWeaponMesh(w); m.visible = true; m.position.copy(R.posW);
-      _xc.set(0, 1, 0).applyQuaternion(R.qW); _xb.copy(R.posW).add(R.dirW); _xm.lookAt(R.posW, _xb, _xc); m.quaternion.setFromRotationMatrix(_xm);
+      const m = xrWeaponMesh(w); m.visible = true; for (const c of V.gloves.right.pad) c.visible = false;
+      _xc.set(0, 0, -1).applyQuaternion(R.qW); _xb.copy(R.posW).add(R.dirW); _xm.lookAt(R.posW, _xb, _xc); m.quaternion.setFromRotationMatrix(_xm);
+      m.position.copy(R.posW).add(_xa.set(0, 0.03, -0.01).applyQuaternion(m.quaternion));
     }
     else if (R.kind === 'hand' && R.shape.gun) {
       const g = WEAPONS[w].melee ? XR_GUNS.find(k => player.has(k)) : w;
@@ -4276,7 +4320,7 @@ function xrDraw(dt) {
   const L = XR.hands.left, Wr = XR.wrist;
   Wr.mesh.visible = !!(L && L.ok);
   if (Wr.mesh.visible) {
-    _xa.set(0, 0.045, 0.08).applyQuaternion(L.qW); if (L.kind === 'hand') _xa.set(0, 0.05, 0.03).applyQuaternion(L.qW);
+    _xa.set(-0.05, 0.1, 0).applyQuaternion(L.qW); if (L.kind === 'hand') _xa.set(0, 0.05, 0.03).applyQuaternion(L.qW);
     Wr.mesh.position.copy(L.posW).add(_xa); Wr.mesh.lookAt(XR.headW);
     XR.wristT -= dt; if (XR.wristT <= 0) { XR.wristT = 0.25; xrDrawWrist(Wr); }
     // hand tracking: touch the wrist buttons with your right index finger
@@ -4344,40 +4388,121 @@ function xrDrawWrist(Wr) {
 
 // ============================================================
 //  Oculus Beta: talk to people. Small open-source models run on the device:
-//    hearing: Whisper tiny.en · replies: SmolLM2-135M-Instruct · voices: the device's own, or Kokoro-82M
+//    hearing: Moonshine tiny · replies: SmolLM2-135M-Instruct · voices: the device's own, or Piper (LibriTTS-R)
+//  Built for speed: replies stream into the speech bubble as they are written, and each finished
+//  clause is spoken (in a second worker) while the rest is still being written.
 //  The mic starts muted. X (or T on a keyboard) unmutes it; then just talk to someone close by.
 // ============================================================
 const TALK_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js';
-const TALK_TTS_LIB = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
-const TALK_MODELS = { stt: 'onnx-community/whisper-tiny.en', llm: 'HuggingFaceTB/SmolLM2-135M-Instruct', tts: 'onnx-community/Kokoro-82M-v1.0-ONNX' };
+const TALK_ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
+const TALK_PHON = 'https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js';
+const TALK_PIPER = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx';
+const TALK_MODELS = { stt: 'onnx-community/moonshine-tiny-ONNX', llm: 'HuggingFaceTB/SmolLM2-135M-Instruct' };
 const TALK_IDLE = new Set(['walk', 'cross', 'return', 'target', 'cop']);
-// all three models live in a Web Worker, so the game (and the headset) keep running while they think
-const TALK_WORKER = `
+// Piper LibriTTS-R speakers sorted by voice pitch: clearly high voices for women, clearly low ones for men
+const TALK_PIPER_VOICES = {
+  f: [99, 11, 38, 62, 77, 109, 46, 118, 93, 40, 12, 76, 59, 74, 103, 69, 108, 23, 30, 47, 65, 66, 83, 95, 4, 15, 18, 107, 20, 61, 68, 85, 101, 73, 115, 91, 29, 9, 14, 94, 100, 57, 60, 54],
+  m: [36, 22, 50, 5, 31, 113, 7, 3, 90, 27, 8, 43, 105, 48, 97, 51, 52, 16, 86, 116, 34, 6, 117, 21, 55, 44, 53, 58, 49],
+};
+// hearing and replies live in one Web Worker, the voice in another, so the game (and the headset) keep running
+// and the voice can speak the first clause while the reply is still being written
+const TALK_BRAIN = String.raw`
 import * as T from '${TALK_LIB}';
 T.env.allowLocalModels = false;
-let stt = null, llm = null, tts = null;
+let stt = null, llm = null, chain = Promise.resolve();
+// primed conversations: the model reads a person's instructions while you walk up, so it can answer at once
+const kv = new Map();
 const prog = tag => p => { if (p.status === 'progress' && p.total) postMessage({ type: 'progress', key: tag + p.file, loaded: p.loaded, total: p.total }); };
-onmessage = async e => {
-  const m = e.data;
+// stop after one full sentence (two when the first is only a word or two): short replies start and finish fast
+const enough = t => { const s = t.match(/[^.!?]+[.!?]+(?=\s+\S)/g) || []; return s.length >= 2 || (s.length === 1 && s[0].trim().split(/\s+/).length >= 4); };
+const chat = (msgs, gen) => llm.tokenizer.apply_chat_template(msgs, { add_generation_prompt: gen, return_dict: true });
+async function handle(m) {
   try {
     if (m.type === 'load') {
       [stt, llm] = await Promise.all([
         T.pipeline('automatic-speech-recognition', m.models.stt, { dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' }, device: 'wasm', progress_callback: prog('stt') }),
         T.pipeline('text-generation', m.models.llm, { dtype: 'q8', device: 'wasm', progress_callback: prog('llm') }),
       ]);
-      if (m.tts) { const K = await import('${TALK_TTS_LIB}'); tts = await K.KokoroTTS.from_pretrained(m.models.tts, { dtype: 'q8', device: 'wasm', progress_callback: prog('tts') }); }
+      // warm up both paths (a fresh prompt and a primed one) so the first real conversation is as fast as the rest
+      await stt(new Float32Array(16000), { max_new_tokens: 2 });
+      const warm = [{ role: 'system', content: 'You are Sam, a 30-year-old man who works as a cook in Harbor City. You are friendly and relaxed. A stranger talks to you on a street. Reply as Sam in one short spoken sentence.' }];
+      const pre = await llm.model.generate(Object.assign({}, chat(warm, false), { max_new_tokens: 1, return_dict_in_generate: true }));
+      await llm.model.generate(Object.assign({}, chat([...warm, { role: 'user', content: 'Hi there, how are you doing today?' }], true), { past_key_values: pre.past_key_values, max_new_tokens: 6, do_sample: true, temperature: 0.8, top_p: 0.92, repetition_penalty: 1.15,
+        streamer: new T.TextStreamer(llm.tokenizer, { skip_prompt: true, callback_function: () => { } }), stopping_criteria: new T.InterruptableStoppingCriteria() }));
       postMessage({ type: 'done', id: m.id });
     } else if (m.type === 'stt') {
-      const r = await stt(m.pcm); postMessage({ type: 'done', id: m.id, text: r.text || '' });
+      const r = await stt(m.pcm, { max_new_tokens: Math.ceil(m.pcm.length / 16000 * 7) + 4 });
+      postMessage({ type: 'done', id: m.id, text: r.text || '' });
+    } else if (m.type === 'prime') {
+      const inp = chat(m.messages, false), c = kv.get(m.key);
+      if (!(c && c.ids.length === inp.input_ids.data.length && c.ids.every((v, i) => v === inp.input_ids.data[i]))) {
+        const r = await llm.model.generate(Object.assign({}, inp, { max_new_tokens: 1, return_dict_in_generate: true }));
+        kv.delete(m.key); kv.set(m.key, { ids: inp.input_ids.data, pkv: r.past_key_values });
+        while (kv.size > 4) kv.delete(kv.keys().next().value);
+      }
+      postMessage({ type: 'done', id: m.id });
     } else if (m.type === 'llm') {
-      const out = await llm(m.messages, m.opts), g = out[0].generated_text;
-      postMessage({ type: 'done', id: m.id, text: Array.isArray(g) ? (g[g.length - 1].content || '') : String(g) });
-    } else if (m.type === 'tts') {
-      const a = await tts.generate(m.text, { voice: m.voice, speed: m.speed });
-      postMessage({ type: 'done', id: m.id, audio: a.audio, rate: a.sampling_rate }, [a.audio.buffer]);
+      const inp = chat(m.messages, true), ids = inp.input_ids.data, c = kv.get(m.key);
+      const hit = !!c && c.ids.length < ids.length && c.ids.every((v, i) => v === ids[i]);
+      const stop = new T.InterruptableStoppingCriteria(); let text = '';
+      const streamer = new T.TextStreamer(llm.tokenizer, { skip_prompt: true, skip_special_tokens: true,
+        callback_function: t => { text += t; postMessage({ type: 'tok', id: m.id, text }); if (enough(text)) stop.interrupt(); } });
+      await llm.model.generate(Object.assign({}, inp, m.opts, { past_key_values: hit ? c.pkv : null, streamer, stopping_criteria: stop }));
+      postMessage({ type: 'done', id: m.id, text, cached: hit });
     }
   } catch (err) { postMessage({ type: 'error', id: m.id, message: String(err && err.message || err) }); }
-};`;
+}
+onmessage = e => { const m = e.data; chain = chain.then(() => handle(m)); }; // one job at a time, in order
+`;
+// Piper: a fast VITS voice (one sentence in about a second on a phone CPU), 900 speakers in one 79 MB file
+const TALK_VOICE = String.raw`
+import * as ort from '${TALK_ORT}ort.wasm.min.mjs';
+import { phonemize } from '${TALK_PHON}';
+ort.env.wasm.wasmPaths = '${TALK_ORT}'; ort.env.wasm.numThreads = 1;
+let cfg = null, sess = null, chain = Promise.resolve();
+async function get(url, key) { // downloaded once, then kept in the browser's cache storage
+  let c = null; try { c = await caches.open('hch-voice-v1'); const hit = await c.match(url); if (hit) return hit; } catch (_) { c = null; }
+  const r = await fetch(url); if (!r.ok) throw new Error('voice download failed (' + r.status + ')');
+  const total = +r.headers.get('content-length') || 0, rd = r.body.getReader(), parts = []; let got = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); got += value.length; if (total) postMessage({ type: 'progress', key, loaded: got, total }); }
+  const res = new Response(new Blob(parts));
+  if (c) try { await c.put(url, res.clone()); } catch (_) { }
+  return res;
+}
+// espeak drops punctuation, so phonemize clause by clause and put the pauses and question marks back
+async function phon(text) {
+  let out = '';
+  for (const part of text.match(/[^,.;:!?…]+[,.;:!?…]*/g) || []) {
+    const words = part.replace(/[,.;:!?…]+$/, '').trim(); if (!/[a-z0-9]/i.test(words)) continue;
+    const mark = ((part.match(/[,.;:!?…]+$/) || [''])[0].replace(/…/g, '.')[0]) || '';
+    out += (out ? ' ' : '') + (await phonemize(words, 'en-us')).join(' ') + mark;
+  }
+  return out;
+}
+async function synth(text, sid, len) {
+  const M = cfg.phoneme_id_map, x = [...M['^'], ...M['_']];
+  for (const ch of Array.from(await phon(text))) { const v = M[ch]; if (v) x.push(...v, ...M['_']); }
+  x.push(...M['$']);
+  const I = a => BigInt64Array.from(a, v => BigInt(v));
+  const r = await sess.run({ input: new ort.Tensor('int64', I(x), [1, x.length]), input_lengths: new ort.Tensor('int64', I([x.length]), [1]),
+    scales: new ort.Tensor('float32', Float32Array.from([cfg.inference.noise_scale, len, cfg.inference.noise_w]), [3]), sid: new ort.Tensor('int64', I([sid]), [1]) });
+  return new Float32Array(r.output.data);
+}
+async function handle(m) {
+  try {
+    if (m.type === 'load') {
+      cfg = await (await get(m.url + '.json', 'voicecfg')).json();
+      sess = await ort.InferenceSession.create(new Uint8Array(await (await get(m.url, 'voice')).arrayBuffer()), { executionProviders: ['wasm'] });
+      await synth('Hi.', 0, 1); // warm up
+      postMessage({ type: 'done', id: m.id });
+    } else if (m.type === 'tts') {
+      const a = await synth(m.text, m.sid, m.len);
+      postMessage({ type: 'done', id: m.id, audio: a, rate: cfg.audio.sample_rate }, [a.buffer]);
+    }
+  } catch (err) { postMessage({ type: 'error', id: m.id, message: String(err && err.message || err) }); }
+}
+onmessage = e => { const m = e.data; chain = chain.then(() => handle(m)); }; // one sentence at a time, in order
+`;
 const TALK_NAMES = {
   f: ['Maria', 'Aisha', 'Chloe', 'Priya', 'Grace', 'Sofia', 'Mei', 'Fatima', 'Hannah', 'Lucia', 'Nia', 'Olivia', 'Rosa', 'Yuki', 'Zoe', 'Elena', 'Tamara', 'Brianna', 'Ingrid', 'Leila', 'Dana', 'Keisha', 'Ana', 'Margaret'],
   m: ['James', 'Marcus', 'Diego', 'Wei', 'Omar', 'Liam', 'Tyrone', 'Ivan', 'Raj', 'Kenji', 'Andre', 'Felix', 'Hector', 'Malik', 'Sam', 'Tomas', 'Viktor', 'Darnell', 'Ethan', 'Luca', 'Frank', 'Kwame', 'Pedro', 'Walter'],
@@ -4387,13 +4512,12 @@ const TALK_JOBS = ['a barista', 'a bus driver', 'a night-shift nurse', 'a hot do
 const TALK_TRAITS = ['friendly and chatty', 'grumpy and impatient', 'nervous and jumpy', 'sarcastic', 'cheerful and upbeat', 'suspicious of strangers', 'dramatic and loud', 'shy and quiet', 'a bit of a philosopher', 'a big gossip', 'proud of the neighborhood', 'always in a hurry', 'funny and teasing', 'polite but cautious', 'laid-back'];
 const TALK_MOODS = ['in a good mood', 'annoyed', 'bored', 'excited about the weekend', 'worried about rent', 'hungry', 'running late', 'relaxed', 'tired'];
 const TALK_QUIRKS = ['love the Harbor City Gulls football team', 'are saving up for a car', 'hate the downtown traffic', 'just got a new puppy', 'think the police are useless', 'are learning the guitar', 'swear the docks are haunted', 'grew up in Old Port', 'want to move somewhere quieter', 'know every food truck in town', 'won a small lottery prize last year', 'are training for a marathon'];
-const TALK_KOKORO = { f: ['af_heart', 'af_bella', 'af_nicole', 'af_sarah', 'af_sky', 'af_nova', 'af_jessica', 'af_river', 'af_kore', 'af_aoede', 'bf_emma', 'bf_isabella', 'bf_alice', 'bf_lily'], m: ['am_adam', 'am_michael', 'am_fenrir', 'am_puck', 'am_echo', 'am_eric', 'am_liam', 'am_onyx', 'bm_george', 'bm_lewis', 'bm_daniel', 'bm_fable'] };
 const TALK_FEMALE_VOICE = /female|woman|samantha|victoria|karen|moira|tessa|zira|susan|fiona|allison|\bava\b|serena|\bkate\b|veena|joanna|salli|kimberly|kendra|\bivy\b|\bemma\b|\bamy\b|aria|jenny|libby|sonia|natasha|clara|michelle|olivia|catherine|hazel|heera|linda|\bsara\b|google us english/i;
 const TALK_MALE_VOICE = /\bmale\b|daniel|\balex\b|\bfred\b|david|\bmark\b|george|\bguy\b|ryan|james|\btom\b|aaron|arthur|gordon|oliver|rishi|matthew|justin|joey|brian|christopher|\beric\b|roger|thomas|william|\bliam\b|ravi/i;
 
 const TALK = {
   micOn: false, state: 'idle', ready: false, load: null, prog: {}, pct: 0, err: '',
-  worker: null, seq: 1, wait: {}, useDevice: false, devVoices: { f: [], m: [] }, vk: { f: 0, m: 0 },
+  worker: null, voiceW: null, seq: 1, wait: {}, useDevice: false, devVoices: { f: [], m: [] }, vk: { f: 0, m: 0 },
   stream: null, actx: null, src: null, proc: null, rec: [], speechT: 0, silT: 0, noise: 0.004, rate: 16000,
   bags: {}, bubble: null, bubbleT: 0, bubbleKey: '', talker: null, audioOut: null,
 
@@ -4407,11 +4531,11 @@ const TALK = {
     if (this.micOn) { this.micOn = false; this.stopMic(); HUD.toast('Mic muted.', 1.5); return; }
     this.micOn = true;
     try { await this.startMic(); } catch (e) { this.micOn = false; HUD.toast('Microphone blocked: ' + (e && e.message || e), 4); return; }
-    HUD.toast(this.ready ? 'Mic on. Walk up to someone and talk.' : 'Mic on. Downloading the talk AI first (about 180 MB, once).', 3);
+    HUD.toast(this.ready ? 'Mic on. Walk up to someone and talk.' : 'Mic on. Downloading the talk AI first (about 250 MB, once).', 3);
     this.ensure();
     if (this.ready) this.state = 'listening';
   },
-  // ---- microphone with a simple voice detector: an utterance ends after 0.7 s of quiet ----
+  // ---- microphone with a simple voice detector: an utterance ends after under half a second of quiet ----
   async startMic() {
     if (this.stream) return;
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
@@ -4419,7 +4543,7 @@ const TALK = {
     try { this.actx = new AC({ sampleRate: 16000 }); } catch (_) { this.actx = new AC(); }
     this.rate = this.actx.sampleRate;
     this.src = this.actx.createMediaStreamSource(this.stream);
-    this.proc = this.actx.createScriptProcessor(4096, 1, 1);
+    this.proc = this.actx.createScriptProcessor(1024, 1, 1);
     const mute = this.actx.createGain(); mute.gain.value = 0;
     this.src.connect(this.proc); this.proc.connect(mute); mute.connect(this.actx.destination);
     this.proc.onaudioprocess = e => this.onAudio(e.inputBuffer.getChannelData(0));
@@ -4438,7 +4562,7 @@ const TALK = {
     else if (this.rec.length) { this.rec.push(ch.slice()); this.silT += dur; }
     else this.noise = this.noise * 0.95 + rms * 0.05;
     const total = this.rec.length * dur;
-    if (this.rec.length && (this.silT > 0.7 || total > 10)) {
+    if (this.rec.length && (this.silT > 0.42 || total > 10)) {
       const chunks = this.rec, spoke = this.speechT; this.rec = []; this.speechT = 0; this.silT = 0;
       if (spoke > 0.35) this.hear(this.to16k(chunks));
     }
@@ -4452,12 +4576,14 @@ const TALK = {
     return out;
   },
   // ---- the models: downloaded once on first use, then cached by the browser ----
-  call(msg, transfer) {
-    return new Promise((res, rej) => { const id = this.seq++; this.wait[id] = { res, rej }; this.worker.postMessage(Object.assign({ id }, msg), transfer || []); });
+  call(msg, transfer, worker = this.worker, tok = null) {
+    return new Promise((res, rej) => { const id = this.seq++; this.wait[id] = { res, rej, tok }; worker.postMessage(Object.assign({ id }, msg), transfer || []); });
   },
   onMsg(m) {
     if (m.type === 'progress') { this.prog[m.key] = [m.loaded, m.total]; this.updatePct(); return; }
-    const w = this.wait[m.id]; if (!w) return; delete this.wait[m.id];
+    const w = this.wait[m.id]; if (!w) return;
+    if (m.type === 'tok') { if (w.tok) w.tok(m.text); return; }
+    delete this.wait[m.id];
     if (m.type === 'error') w.rej(new Error(m.message)); else w.res(m);
   },
   ensure() {
@@ -4465,12 +4591,15 @@ const TALK = {
     this.state = 'loading'; this.err = '';
     this.load = (async () => {
       this.useDevice = await this.deviceVoices();
-      if (!this.worker) {
-        this.worker = new Worker(URL.createObjectURL(new Blob([TALK_WORKER], { type: 'text/javascript' })), { type: 'module' });
-        this.worker.onmessage = e => this.onMsg(e.data);
-        this.worker.onerror = e => { const err = new Error(e.message || 'the AI worker failed to start'); for (const k in this.wait) this.wait[k].rej(err); this.wait = {}; };
-      }
-      await this.call({ type: 'load', models: TALK_MODELS, tts: !this.useDevice });
+      const mk = src => {
+        const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' });
+        w.onmessage = e => this.onMsg(e.data);
+        w.onerror = e => { const err = new Error(e.message || 'the AI worker failed to start'); for (const k in this.wait) this.wait[k].rej(err); this.wait = {}; };
+        return w;
+      };
+      if (!this.worker) this.worker = mk(TALK_BRAIN);
+      if (!this.useDevice && !this.voiceW) this.voiceW = mk(TALK_VOICE);
+      await Promise.all([this.call({ type: 'load', models: TALK_MODELS }), this.useDevice ? null : this.call({ type: 'load', url: TALK_PIPER }, null, this.voiceW)]);
       this.ready = true; this.state = this.micOn ? 'listening' : 'idle';
       HUD.toast('Talk AI ready. Walk up to someone and talk.', 3);
     })().catch(e => { this.err = e && e.message || String(e); this.load = null; this.state = 'idle'; HUD.toast('Could not load the talk AI: ' + this.err, 5); });
@@ -4511,8 +4640,7 @@ const TALK = {
       age: cop ? 24 + Math.floor(r() * 30) : 18 + Math.floor(r() * 58), cop,
       job: cop ? 'a Harbor City police officer' : pk(TALK_JOBS, 'job'), trait: cop ? pk(['stern and by-the-book', 'tired and short-tempered', 'calm but watchful'], 'cop') : pk(TALK_TRAITS, 'trait'),
       mood: pk(TALK_MOODS, 'mood'), quirk: pk(TALK_QUIRKS, 'quirk'), history: [],
-      kvoice: TALK_KOKORO[g][this.vk[g]++ % TALK_KOKORO[g].length],
-      dv: this.vk[g], pitch: female ? 1.05 + r() * 0.3 : 0.72 + r() * 0.24, rate: 0.92 + r() * 0.18,
+      sid: pk(TALK_PIPER_VOICES[g], 'v' + g), dv: ++this.vk[g], pitch: female ? 1.05 + r() * 0.3 : 0.72 + r() * 0.24, rate: 0.92 + r() * 0.18,
     };
     if (cop) P.first = P.name;
     return (p.persona = P);
@@ -4533,83 +4661,127 @@ const TALK = {
   async hear(pcm) {
     if (!this.ready) { HUD.toast(`Still downloading the talk AI (${this.pct}%).`, 2); return; }
     this.state = 'thinking';
+    // whoever you are facing stops, turns to you and shows they heard you, before the words are even transcribed
+    const p = this.target(), P = p && this.persona(p);
+    if (p) { p.talkT = 14; this.talker = p; this.say(p, P, '…', true); }
     try {
       const heard = ((await this.call({ type: 'stt', pcm }, [pcm.buffer])).text || '').replace(/\[[^\]]*\]|\([^)]*\)/g, '').trim();
-      if (heard.length < 2) { this.state = 'listening'; return; }
+      if (heard.length < 2) { if (p && this.bubble) this.bubble.visible = false; this.state = 'listening'; return; }
       HUD.toast('You: ' + heard, 3);
-      const p = this.target();
-      if (!p) { HUD.toast('Nobody is close enough to hear you. Walk up and face them.', 2.5); this.state = 'listening'; return; }
-      const P = this.persona(p); p.talkT = 14; this.talker = p;
-      const reply = await this.reply(P, heard, p);
-      this.say(p, P, reply);
-      this.state = 'speaking'; p.talkT = 14;
-      await this.speak(P, reply, p);
-    } catch (e) { HUD.toast('Talk AI error: ' + (e && e.message || e), 3); }
+      if (!p) { HUD.toast('Nobody is close enough to hear you. Walk up and face them.', 2.5); this.state = this.micOn ? 'listening' : 'idle'; return; }
+      await this.reply(P, heard, p);
+    } catch (e) { HUD.toast('Talk AI error: ' + (e && e.message || e), 3); this.bubbleT = Math.min(this.bubbleT, 1); }
     this.state = this.micOn ? 'listening' : 'idle';
   },
-  async reply(P, heard, p) {
+  // the reply streams into the bubble word by word; every finished sentence (or long clause) goes straight to the voice
+  prompt(P, p) {
     const hour = Math.floor(dayHour), where = districtAt(p.pos.x, p.pos.z);
     const sit = [];
     if (wanted.stars > 0) sit.push(P.cop ? `The stranger is wanted by the police with ${wanted.stars} stars and you recognise them.` : 'Police sirens are close and the stranger looks like trouble.');
     if (!WEAPONS[player.weapon].melee) sit.push(`The stranger is holding a ${WEAPONS[player.weapon].name.toLowerCase()} and you are scared.`);
     if (p.health < p.maxHealth) sit.push('The stranger hit you a moment ago and you are angry about it.');
     if (hour >= 22 || hour < 5) sit.push('It is late at night.');
-    const sys = `You are ${P.name}, a ${P.age}-year-old ${P.female ? 'woman' : 'man'} in Harbor City. You work as ${P.job}. You are ${P.trait}, and right now you are ${P.mood}. You ${P.quirk}. ` +
-      `You are on a street in ${where} when a stranger walks up and talks to you. ${sit.join(' ')} Stay in character as ${P.first}. Answer in one or two short spoken sentences. Never say you are an AI.`;
-    const msgs = [{ role: 'system', content: sys }, ...P.history.slice(-6), { role: 'user', content: heard }];
-    let text = (await this.call({ type: 'llm', messages: msgs, opts: { max_new_tokens: 44, do_sample: true, temperature: 0.8, top_p: 0.92, repetition_penalty: 1.15 } })).text || '';
-    text = text.replace(/^\s*(assistant|ai|[A-Z][a-z]+ ?[A-Z]?[a-z]*):\s*/i, '').replace(/["*]/g, '').replace(/\s+/g, ' ').trim();
-    const parts = text.match(/[^.!?]+[.!?]+/g); if (parts) text = parts.slice(0, 2).join('').trim(); else if (text) text += '…'; // drop a sentence the model did not finish
+    const sys = `You are ${P.name}, a ${P.age}-year-old ${P.female ? 'woman' : 'man'} who works as ${P.job} in Harbor City. You are ${P.trait} and ${P.mood}, and you ${P.quirk}. ` +
+      `A stranger talks to you on a street in ${where}. ${sit.length ? sit.join(' ') + ' ' : ''}Reply as ${P.first} in one short spoken sentence. Never mention AI.`;
+    return [{ role: 'system', content: sys }, ...P.history.slice(-4)];
+  },
+  // read someone's instructions ahead of time (while you face them, and again after each reply)
+  prime(p) {
+    if (!this.ready || !p) return;
+    const P = this.persona(p); this.primed = p;
+    this.call({ type: 'prime', key: P.name, messages: this.prompt(P, p) }).catch(() => { });
+  },
+  async reply(P, heard, p) {
+    const msgs = [...this.prompt(P, p), { role: 'user', content: heard }];
+    const tidy = t => t.replace(/^\s*(assistant|ai|[A-Z][a-z]+ ?[A-Z]?[a-z]*):\s*/i, '').replace(/["*]/g, '').replace(/\s+/g, ' ').trimStart();
+    const bad = t => /\bAI\b|language model|assistant/i.test(t);
+    const voice = this.voice(P, p); let sent = 0, off = false, live = '';
+    const feed = (t, last) => {
+      if (off) return;
+      if (bad(t)) { off = true; return; }
+      for (let n; (n = this.piece(t.slice(sent), last)) > 0;) { voice.add(t.slice(sent, sent + n).trim()); sent += n; }
+    };
+    let text = (await this.call({ type: 'llm', key: P.name, messages: msgs, opts: { max_new_tokens: 28, do_sample: true, temperature: 0.8, top_p: 0.92, repetition_penalty: 1.15 } }, null, this.worker, raw => {
+      const t = tidy(raw); if (!t || bad(t)) return;
+      live = t; this.say(p, P, t, true); feed(t, false);
+    })).text || '';
+    text = tidy(text).trim();
+    const parts = text.match(/[^.!?…]+[.!?…]+/g); if (parts) text = parts.join('').trim(); else if (text) text += '…'; // drop a sentence the model did not finish
+    if (sent > text.length && !off) { text = live.slice(0, sent).trim(); if (!/[.!?…]$/.test(text)) text += '…'; }
     if (text.length > 220) text = text.slice(0, 220).replace(/\s+\S*$/, '') + '…';
-    if (!text || /\bAI\b|language model/i.test(text)) text = pick(['Huh? Sorry, I didn\'t catch that.', 'What? Talk louder, it\'s noisy out here.', 'Uh, do I know you?']);
+    if (!text || bad(text)) { text = pick(['Huh? Sorry, I didn\'t catch that.', 'What? Talk louder, it\'s noisy out here.', 'Uh, do I know you?']); if (!sent) { off = false; feed(text, true); } }
+    else feed(text, true);
     P.history.push({ role: 'user', content: heard }, { role: 'assistant', content: text });
+    this.say(p, P, text); this.prime(p); // ready for what you say next, while they are still talking
+
+    this.state = 'speaking'; p.talkT = 14;
+    await voice.end(); p.talkT = Math.max(p.talkT, 3); this.bubbleT = Math.min(this.bubbleT, 2.5 + text.length / 40);
     return text;
   },
+  // length of the next piece worth speaking on its own: a sentence, a clause of five words or more,
+  // or in a long run-on, the words before a joining word (or the first nine)
+  piece(rest, last) {
+    const m = /[.!?…]+\s/.exec(rest); if (m) return m.index + m[0].length;
+    for (const c of rest.matchAll(/,\s/g)) if (rest.slice(0, c.index).trim().split(/\s+/).length >= 5) return c.index + c[0].length;
+    const w = [...rest.matchAll(/\S+\s+/g)]; // whole words only
+    for (let i = 5; i < w.length; i++) if (/^(and|but|so|because|or|then|when|if|though)\s/i.test(w[i][0])) return w[i].index;
+    if (w.length >= 9) return w[8].index + w[8][0].length;
+    return last && /[a-z0-9]/i.test(rest) ? rest.length : 0;
+  },
   // ---- the reply: a speech bubble over their head, and their own voice from where they stand ----
-  say(p, P, text) {
-    HUD.toast(`${P.first}: ${text}`, Math.min(8, 2.5 + text.length / 18));
+  say(p, P, text, live) {
+    if (!live) HUD.toast(`${P.first}: ${text}`, Math.min(8, 2.5 + text.length / 18));
     if (!this.bubble) {
       const c = document.createElement('canvas'); c.width = 1024; c.height = 320;
       const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
       this.bubble = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, depthWrite: false, transparent: true, toneMapped: false }));
       this.bubble.scale.set(1.9, 0.6, 1); this.bubble.renderOrder = 998; this.bubble.c = c; this.bubble.tex = tex; scene.add(this.bubble);
     }
-    const b = this.bubble, g = b.c.getContext('2d');
+    const b = this.bubble;
+    b.visible = true; b.who = p; this.bubbleT = live ? 12 : 30;
+    if (b.key === P.first + text) return; b.key = P.first + text;
+    const g = b.c.getContext('2d');
     g.clearRect(0, 0, 1024, 320); g.fillStyle = 'rgba(11,13,18,0.85)'; g.beginPath(); g.roundRect(8, 8, 1008, 304, 36); g.fill();
     g.fillStyle = '#ffb347'; g.font = '700 44px "Barlow Condensed", Arial'; g.textBaseline = 'top'; g.fillText(P.first, 40, 28);
     g.fillStyle = '#f3eee4'; g.font = '600 46px "Barlow Condensed", Arial';
     const words = text.split(' '); let line = '', y = 86;
     for (const w of words) { const t = line ? line + ' ' + w : w; if (g.measureText(t).width > 944 && line) { g.fillText(line, 40, y); y += 54; line = w; if (y > 250) break; } else line = t; }
     if (line && y <= 250) g.fillText(line, 40, y);
-    b.tex.needsUpdate = true; b.visible = true; b.who = p; this.bubbleT = Math.min(9, 3 + text.length / 16);
+    b.tex.needsUpdate = true;
   },
-  speak(P, text, p) {
-    if (this.useDevice) return new Promise(res => {
-      const u = new SpeechSynthesisUtterance(text), list = this.devVoices[P.female ? 'f' : 'm'];
-      u.voice = list[(P.dv - 1) % list.length]; u.pitch = P.pitch; u.rate = P.rate; u.onend = u.onerror = () => res();
-      speechSynthesis.cancel(); speechSynthesis.speak(u); setTimeout(res, 2000 + text.length * 90);
-    });
-    return this.speakAI(P, text, p);
-  },
-  // Kokoro voice, a sentence at a time: the next sentence is made while this one plays, from where they stand
-  async speakAI(P, text, p) {
+  // a voice for one reply: add() pieces as they are written, end() resolves when the last one has been spoken
+  voice(P, p) {
+    if (this.useDevice) {
+      speechSynthesis.cancel(); let last = null, words = 0;
+      const list = this.devVoices[P.female ? 'f' : 'm'];
+      return {
+        add: t => { const u = new SpeechSynthesisUtterance(t); u.voice = list[(P.dv - 1) % list.length]; u.pitch = P.pitch; u.rate = P.rate; words += t.length; last = new Promise(r => { u.onend = u.onerror = r; }); speechSynthesis.speak(u); },
+        end: () => last ? Promise.race([last, new Promise(r => setTimeout(r, 2000 + words * 90))]) : Promise.resolve(),
+      };
+    }
     const ctx = (AUDIO.ok && AUDIO.ctx) || this.audioOut || (this.audioOut = new (window.AudioContext || window.webkitAudioContext)());
+    if (ctx.state === 'suspended') ctx.resume().catch(() => { });
     const pan = ctx.createPanner(); pan.panningModel = 'HRTF'; pan.distanceModel = 'inverse'; pan.refDistance = 1.5;
     const h = 1.6 * p.look.height; pan.positionX ? (pan.positionX.value = p.pos.x, pan.positionY.value = p.pos.y + h, pan.positionZ.value = p.pos.z) : pan.setPosition(p.pos.x, p.pos.y + h, p.pos.z);
     pan.connect(ctx === AUDIO.ctx ? AUDIO.out : ctx.destination); this.talkCtx = ctx;
-    const parts = (text.match(/[^.!?…]+[.!?…]+|[^.!?…]+$/g) || [text]).map(t => t.trim()).filter(Boolean);
-    const make = t => this.call({ type: 'tts', text: t, voice: P.kvoice, speed: P.rate });
-    let at = 0, next = make(parts[0]);
-    for (let i = 0; i < parts.length; i++) {
-      const a = await next; if (i + 1 < parts.length) next = make(parts[i + 1]);
-      const buf = ctx.createBuffer(1, a.audio.length, a.rate); buf.copyToChannel(a.audio, 0);
-      const s = ctx.createBufferSource(); s.buffer = buf; s.connect(pan);
-      const t0 = Math.max(ctx.currentTime + 0.02, at); s.start(t0); at = t0 + buf.duration;
-    }
-    await new Promise(r => setTimeout(r, Math.max(0, (at - ctx.currentTime) * 1000)));
+    let q = Promise.resolve(), at = 0;
+    return {
+      add: t => {
+        const job = this.call({ type: 'tts', text: t, sid: P.sid, len: 0.97 / P.rate }, null, this.voiceW); // starts now, in parallel with the reply
+        q = q.then(() => job).then(a => {
+          const buf = ctx.createBuffer(1, a.audio.length, a.rate); buf.copyToChannel(a.audio, 0);
+          const s = ctx.createBufferSource(); s.buffer = buf; s.connect(pan);
+          const t0 = Math.max(ctx.currentTime + 0.02, at); s.start(t0); at = t0 + buf.duration;
+        }).catch(e => console.warn('voice', e));
+      },
+      end: async () => { await q; await new Promise(r => setTimeout(r, Math.max(0, (at - ctx.currentTime) * 1000))); },
+    };
   },
   // ---- every frame: keep the bubble over the speaker's head and the ear on the camera ----
   update(dt) {
+    if (this.ready && this.micOn && this.state === 'listening' && (this.primeT = (this.primeT || 0) - dt) <= 0) {
+      this.primeT = 0.4; const t = this.target(); if (t && t !== this.primed) this.prime(t);
+    }
     const b = this.bubble;
     if (b && b.visible) {
       this.bubbleT -= dt; const p = b.who;
@@ -4626,7 +4798,7 @@ const TALK = {
 };
 
 // debugging handle (read-only use from the console)
-Object.assign(window.__hch, { XR, TALK, get Q() { return Q; } });
+Object.assign(window.__hch, { XR, TALK, TALK_PIPER_VOICES, camera, get Q() { return Q; } });
 
 </script>
 
