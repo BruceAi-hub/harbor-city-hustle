@@ -1602,7 +1602,7 @@ class Vehicle {
     this.tailMat = new THREE.MeshStandardMaterial({ color: 0x4a0505, emissive: 0xff2020, emissiveIntensity: 0.2, roughness: 0.3 });
     const P = carParts(type);
     const add = (g, m, cast = true) => { const me = new THREE.Mesh(g, m); me.castShadow = cast; this.body.add(me); return me; };
-    this.paintMesh = add(P.paint, this.paintMat); add(P.trim, carTrimMat); this.glass = add(P.glass, glassMat, false); add(P.heads, headMat, false); add(P.tails, this.tailMat, false);
+    this.paintMesh = add(P.paint, this.paintMat); this.trimMesh = add(P.trim, carTrimMat); this.glass = add(P.glass, glassMat, false); add(P.heads, headMat, false); add(P.tails, this.tailMat, false);
     if (type === 'police') {
       this.sirR = new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff1a1a, emissiveIntensity: 0.1 });
       this.sirB = new THREE.MeshStandardMaterial({ color: 0x000a40, emissive: 0x2050ff, emissiveIntensity: 0.1 });
@@ -3911,7 +3911,7 @@ async function xrStart(director) {
 }
 function xrEnded() {
   XR.session = null; XR.baseRef = null;
-  if (XR.hiddenCar) { XR.hiddenCar.paintMesh.visible = true; XR.hiddenCar.trimMesh.visible = true; XR.hiddenCar = null; }
+  if (XR.hiddenCar) { XR.hiddenCar.paintMesh.visible = true; if (XR.hiddenCar.trimMesh) XR.hiddenCar.trimMesh.visible = true; XR.hiddenCar = null; }
   scene.add(camera);
   if (XR.q) { Q = XR.q; XR.q = null; applyShadowQuality(); onResize(); }
   if (XR.vis) XR.vis.root.visible = false;
@@ -4053,14 +4053,14 @@ function xrUpdate(dt, rdt, live) {
   if (car) {
     if (!XR.wasCar) { XR.wasCar = true; XR.carAnchor.copy(XR.head); XR.carAnchorYaw = headYawL; XR.carSnap = 0; }
     // from the seat the car's roof, pillars and bonnet would block the view: only the windows stay
-    if (car.paintMesh) { car.paintMesh.visible = false; car.trimMesh.visible = false; XR.hiddenCar = car; }
+    if (car.paintMesh && !XR.hiddenCar) { XR.hiddenCar = car; car.paintMesh.visible = false; if (car.trimMesh) car.trimMesh.visible = false; }
     XR.rigYaw = car.heading + Math.PI - XR.carAnchorYaw + XR.carSnap;
     XR_SEAT.set(0.37, car.seatHips + 0.68, -0.22); car.body.updateMatrixWorld(); car.body.localToWorld(XR_SEAT);
     _xa.copy(XR.carAnchor).applyAxisAngle(_xUp, XR.rigYaw);
     XR.rigPos.subVectors(XR_SEAT, _xa);
   } else {
     if (XR.wasCar) { XR.wasCar = false; XR.yaw = XR.rigYaw; }
-    if (XR.hiddenCar) { XR.hiddenCar.paintMesh.visible = true; XR.hiddenCar.trimMesh.visible = true; XR.hiddenCar = null; }
+    if (XR.hiddenCar) { XR.hiddenCar.paintMesh.visible = true; if (XR.hiddenCar.trimMesh) XR.hiddenCar.trimMesh.visible = true; XR.hiddenCar = null; }
     XR.rigYaw = XR.yaw;
     const p = player.root.position;
     _xa.set(XR.head.x, 0, XR.head.z).applyAxisAngle(_xUp, XR.rigYaw);
