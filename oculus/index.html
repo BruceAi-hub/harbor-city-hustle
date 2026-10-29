@@ -6,6 +6,17 @@
 <meta name="theme-color" content="#0b0d12">
 <meta name="description" content="Harbor City Hustle in VR for Meta Quest: hand tracking, fist punches, finger guns and people you can talk to.">
 <link rel="icon" href="../icon-192.png">
+<script>
+// The talk AI runs several times faster on all CPU cores, which needs a cross-origin isolated page.
+// coi-sw.js adds the headers GitHub Pages cannot send; the very first visit reloads once to pick it up.
+if (!self.crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('coi-sw.js', { scope: './' }).then(() => {
+    const go = () => { try { if (sessionStorage.getItem('hch_coi')) return; sessionStorage.setItem('hch_coi', '1'); } catch (_) { return; } location.reload(); };
+    if (navigator.serviceWorker.controller) go(); // controlled but not isolated yet: one reload, never a loop
+    else navigator.serviceWorker.addEventListener('controllerchange', go);
+  }).catch(() => { });
+}
+</script>
 </head>
 <body>
 <title>Harbor City Hustle · Oculus Beta</title>
@@ -4388,7 +4399,9 @@ function xrDrawWrist(Wr) {
 
 // ============================================================
 //  Oculus Beta: talk to people. Small open-source models run on the device:
-//    hearing: Moonshine tiny · replies: SmolLM2-135M-Instruct · voices: the device's own, or Piper (LibriTTS-R)
+//    hearing: Moonshine tiny · replies: SmolLM2-360M-Instruct · voices: the device's own, or Piper (LibriTTS-R)
+//  Everyone gets a few plain facts about their life (home, today, where they are going, a place to eat),
+//  so the small model has real things to say instead of inventing news.
 //  Built for speed: replies stream into the speech bubble as they are written, and each finished
 //  clause is spoken (in a second worker) while the rest is still being written.
 //  The mic starts muted. X (or T on a keyboard) unmutes it; then just talk to someone close by.
@@ -4397,7 +4410,7 @@ const TALK_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/d
 const TALK_ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
 const TALK_PHON = 'https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js';
 const TALK_PIPER = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx';
-const TALK_MODELS = { stt: 'onnx-community/moonshine-tiny-ONNX', llm: 'HuggingFaceTB/SmolLM2-135M-Instruct' };
+const TALK_MODELS = { stt: 'onnx-community/moonshine-tiny-ONNX', llm: 'HuggingFaceTB/SmolLM2-360M-Instruct' };
 const TALK_IDLE = new Set(['walk', 'cross', 'return', 'target', 'cop']);
 // Piper LibriTTS-R speakers sorted by voice pitch: clearly high voices for women, clearly low ones for men
 const TALK_PIPER_VOICES = {
@@ -4409,7 +4422,9 @@ const TALK_PIPER_VOICES = {
 const TALK_BRAIN = String.raw`
 import * as T from '${TALK_LIB}';
 T.env.allowLocalModels = false;
-let stt = null, llm = null, chain = Promise.resolve();
+// several CPU cores when the page is cross-origin isolated (oculus/coi-sw.js), leaving a couple for the game
+T.env.backends.onnx.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 2)) : 1;
+let stt = null, llm = null, chain = Promise.resolve(), banned = [];
 // primed conversations: the model reads a person's instructions while you walk up, so it can answer at once
 const kv = new Map();
 const prog = tag => p => { if (p.status === 'progress' && p.total) postMessage({ type: 'progress', key: tag + p.file, loaded: p.loaded, total: p.total }); };
@@ -4423,11 +4438,13 @@ async function handle(m) {
         T.pipeline('automatic-speech-recognition', m.models.stt, { dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' }, device: 'wasm', progress_callback: prog('stt') }),
         T.pipeline('text-generation', m.models.llm, { dtype: 'q8', device: 'wasm', progress_callback: prog('llm') }),
       ]);
+      // words a person on the street would not say: chatbot apologies and disclaimers
+      banned = [' confusion', ' misunderstanding', ' apologize', ' apologies', ' Apologies', ' AI', ' assistant', ' chatbot', ' as an', ' As an'].map(w => llm.tokenizer.encode(w, { add_special_tokens: false }));
       // warm up both paths (a fresh prompt and a primed one) so the first real conversation is as fast as the rest
       await stt(new Float32Array(16000), { max_new_tokens: 2 });
       const warm = [{ role: 'system', content: 'You are Sam, a 30-year-old man who works as a cook in Harbor City. You are friendly and relaxed. A stranger talks to you on a street. Reply as Sam in one short spoken sentence.' }];
       const pre = await llm.model.generate(Object.assign({}, chat(warm, false), { max_new_tokens: 1, return_dict_in_generate: true }));
-      await llm.model.generate(Object.assign({}, chat([...warm, { role: 'user', content: 'Hi there, how are you doing today?' }], true), { past_key_values: pre.past_key_values, max_new_tokens: 6, do_sample: true, temperature: 0.8, top_p: 0.92, repetition_penalty: 1.15,
+      await llm.model.generate(Object.assign({}, chat([...warm, { role: 'user', content: 'Hi there, how are you doing today?' }], true), { past_key_values: pre.past_key_values, max_new_tokens: 6, do_sample: true, temperature: 0.35, top_p: 0.9, repetition_penalty: 1.1, bad_words_ids: banned,
         streamer: new T.TextStreamer(llm.tokenizer, { skip_prompt: true, callback_function: () => { } }), stopping_criteria: new T.InterruptableStoppingCriteria() }));
       postMessage({ type: 'done', id: m.id });
     } else if (m.type === 'stt') {
@@ -4447,7 +4464,7 @@ async function handle(m) {
       const stop = new T.InterruptableStoppingCriteria(); let text = '';
       const streamer = new T.TextStreamer(llm.tokenizer, { skip_prompt: true, skip_special_tokens: true,
         callback_function: t => { text += t; postMessage({ type: 'tok', id: m.id, text }); if (enough(text)) stop.interrupt(); } });
-      await llm.model.generate(Object.assign({}, inp, m.opts, { past_key_values: hit ? c.pkv : null, streamer, stopping_criteria: stop }));
+      await llm.model.generate(Object.assign({ bad_words_ids: banned }, inp, m.opts, { past_key_values: hit ? c.pkv : null, streamer, stopping_criteria: stop }));
       postMessage({ type: 'done', id: m.id, text, cached: hit });
     }
   } catch (err) { postMessage({ type: 'error', id: m.id, message: String(err && err.message || err) }); }
@@ -4458,7 +4475,7 @@ onmessage = e => { const m = e.data; chain = chain.then(() => handle(m)); }; // 
 const TALK_VOICE = String.raw`
 import * as ort from '${TALK_ORT}ort.wasm.min.mjs';
 import { phonemize } from '${TALK_PHON}';
-ort.env.wasm.wasmPaths = '${TALK_ORT}'; ort.env.wasm.numThreads = 1;
+ort.env.wasm.wasmPaths = '${TALK_ORT}'; ort.env.wasm.numThreads = self.crossOriginIsolated ? 2 : 1;
 let cfg = null, sess = null, chain = Promise.resolve();
 async function get(url, key) { // downloaded once, then kept in the browser's cache storage
   let c = null; try { c = await caches.open('hch-voice-v1'); const hit = await c.match(url); if (hit) return hit; } catch (_) { c = null; }
@@ -4512,6 +4529,14 @@ const TALK_JOBS = ['a barista', 'a bus driver', 'a night-shift nurse', 'a hot do
 const TALK_TRAITS = ['friendly and chatty', 'grumpy and impatient', 'nervous and jumpy', 'sarcastic', 'cheerful and upbeat', 'suspicious of strangers', 'dramatic and loud', 'shy and quiet', 'a bit of a philosopher', 'a big gossip', 'proud of the neighborhood', 'always in a hurry', 'funny and teasing', 'polite but cautious', 'laid-back'];
 const TALK_MOODS = ['in a good mood', 'annoyed', 'bored', 'excited about the weekend', 'worried about rent', 'hungry', 'running late', 'relaxed', 'tired'];
 const TALK_QUIRKS = ['love the Harbor City Gulls football team', 'are saving up for a car', 'hate the downtown traffic', 'just got a new puppy', 'think the police are useless', 'are learning the guitar', 'swear the docks are haunted', 'grew up in Old Port', 'want to move somewhere quieter', 'know every food truck in town', 'won a small lottery prize last year', 'are training for a marathon'];
+const TALK_HOMES = ['Downtown', 'Midtown', 'Old Port', 'Dockside', 'Eastside', 'Northgate', 'Sunset Park'];
+const TALK_TODAY = ['your bus was twenty minutes late this morning', 'your car got a parking ticket', 'you found five dollars on the sidewalk', 'your sister called to say she is having a baby',
+  'your boss gave you the afternoon off', 'you spilled coffee on your shirt', "your neighbor's dog barked all night", 'you got a free sandwich at the deli',
+  'it started raining right after you washed your car', 'the Gulls won their football game last night', 'your phone screen cracked', 'you passed your driving test',
+  'your landlord raised the rent', 'you saw a famous singer at the gas station', 'you overslept and missed breakfast', 'a seagull stole your fries'];
+const TALK_HEADING = ['walking to work', 'heading home', 'going to get a coffee', 'on your way to meet a friend', 'going to the grocery store', 'waiting for the bus', 'out for a walk', 'on your lunch break', 'going to the gym', 'looking for a parking spot'];
+const TALK_FOOD = ["Rosa's Diner in Midtown", 'the taco truck in Dockside', 'Lucky Noodle in Downtown', "Gino's Pizza in Eastside", 'the fish market in Old Port', 'Burger Barn in Northgate', 'the hot dog stand in Sunset Park', "Mama Lin's dumplings in Old Port"];
+const TALK_COP_TODAY = ['you wrote six parking tickets this morning', 'a car thief got away from you yesterday', 'your partner is out sick today', 'the coffee at the station was terrible today'];
 const TALK_FEMALE_VOICE = /female|woman|samantha|victoria|karen|moira|tessa|zira|susan|fiona|allison|\bava\b|serena|\bkate\b|veena|joanna|salli|kimberly|kendra|\bivy\b|\bemma\b|\bamy\b|aria|jenny|libby|sonia|natasha|clara|michelle|olivia|catherine|hazel|heera|linda|\bsara\b|google us english/i;
 const TALK_MALE_VOICE = /\bmale\b|daniel|\balex\b|\bfred\b|david|\bmark\b|george|\bguy\b|ryan|james|\btom\b|aaron|arthur|gordon|oliver|rishi|matthew|justin|joey|brian|christopher|\beric\b|roger|thomas|william|\bliam\b|ravi/i;
 
@@ -4531,7 +4556,7 @@ const TALK = {
     if (this.micOn) { this.micOn = false; this.stopMic(); HUD.toast('Mic muted.', 1.5); return; }
     this.micOn = true;
     try { await this.startMic(); } catch (e) { this.micOn = false; HUD.toast('Microphone blocked: ' + (e && e.message || e), 4); return; }
-    HUD.toast(this.ready ? 'Mic on. Walk up to someone and talk.' : 'Mic on. Downloading the talk AI first (about 250 MB, once).', 3);
+    HUD.toast(this.ready ? 'Mic on. Walk up to someone and talk.' : 'Mic on. Downloading the talk AI first (about 470 MB, once).', 3);
     this.ensure();
     if (this.ready) this.state = 'listening';
   },
@@ -4640,6 +4665,7 @@ const TALK = {
       age: cop ? 24 + Math.floor(r() * 30) : 18 + Math.floor(r() * 58), cop,
       job: cop ? 'a Harbor City police officer' : pk(TALK_JOBS, 'job'), trait: cop ? pk(['stern and by-the-book', 'tired and short-tempered', 'calm but watchful'], 'cop') : pk(TALK_TRAITS, 'trait'),
       mood: pk(TALK_MOODS, 'mood'), quirk: pk(TALK_QUIRKS, 'quirk'), history: [],
+      home: pk(TALK_HOMES, 'home'), today: cop ? pk(TALK_COP_TODAY, 'ctoday') : pk(TALK_TODAY, 'today'), heading: cop ? 'on patrol' : pk(TALK_HEADING, 'heading'), food: pk(TALK_FOOD, 'food'),
       sid: pk(TALK_PIPER_VOICES[g], 'v' + g), dv: ++this.vk[g], pitch: female ? 1.05 + r() * 0.3 : 0.72 + r() * 0.24, rate: 0.92 + r() * 0.18,
     };
     if (cop) P.first = P.name;
@@ -4681,9 +4707,11 @@ const TALK = {
     if (!WEAPONS[player.weapon].melee) sit.push(`The stranger is holding a ${WEAPONS[player.weapon].name.toLowerCase()} and you are scared.`);
     if (p.health < p.maxHealth) sit.push('The stranger hit you a moment ago and you are angry about it.');
     if (hour >= 22 || hour < 5) sit.push('It is late at night.');
-    const sys = `You are ${P.name}, a ${P.age}-year-old ${P.female ? 'woman' : 'man'} who works as ${P.job} in Harbor City. You are ${P.trait} and ${P.mood}, and you ${P.quirk}. ` +
-      `A stranger talks to you on a street in ${where}. ${sit.length ? sit.join(' ') + ' ' : ''}Reply as ${P.first} in one short spoken sentence. Never mention AI.`;
-    return [{ role: 'system', content: sys }, ...P.history.slice(-4)];
+    const sys = `You are ${P.name}, a ${P.age}-year-old ${P.female ? 'woman' : 'man'}. You live in ${P.home} in Harbor City and work as ${P.job}. You are ${P.trait}, and today you are ${P.mood}.\n` +
+      `Facts about you: you ${P.quirk}. Today ${P.today}. Right now you are ${P.heading}. Your favorite place to eat is ${P.food}.\n` +
+      `A stranger is talking to you on a street in ${where}. ${sit.length ? sit.join(' ') + ' ' : ''}Reply like a real person in a normal conversation: answer what the stranger just said, directly, in one short and clear sentence. ` +
+      `Stick to the facts above. Do not invent news or stories, and do not change the subject.`;
+    return [{ role: 'system', content: sys }, ...P.history.slice(-6)];
   },
   // read someone's instructions ahead of time (while you face them, and again after each reply)
   prime(p) {
@@ -4701,7 +4729,7 @@ const TALK = {
       if (bad(t)) { off = true; return; }
       for (let n; (n = this.piece(t.slice(sent), last)) > 0;) { voice.add(t.slice(sent, sent + n).trim()); sent += n; }
     };
-    let text = (await this.call({ type: 'llm', key: P.name, messages: msgs, opts: { max_new_tokens: 28, do_sample: true, temperature: 0.8, top_p: 0.92, repetition_penalty: 1.15 } }, null, this.worker, raw => {
+    let text = (await this.call({ type: 'llm', key: P.name, messages: msgs, opts: { max_new_tokens: 28, do_sample: true, temperature: 0.35, top_p: 0.9, repetition_penalty: 1.1 } }, null, this.worker, raw => {
       const t = tidy(raw); if (!t || bad(t)) return;
       live = t; this.say(p, P, t, true); feed(t, false);
     })).text || '';
