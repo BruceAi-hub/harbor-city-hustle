@@ -4424,7 +4424,7 @@ import * as T from '${TALK_LIB}';
 T.env.allowLocalModels = false;
 // several CPU cores when the page is cross-origin isolated (oculus/coi-sw.js), leaving a couple for the game
 T.env.backends.onnx.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 2)) : 1;
-let stt = null, llm = null, chain = Promise.resolve(), banned = [];
+let llm = null, chain = Promise.resolve(), banned = [];
 // primed conversations: the model reads a person's instructions while you walk up, so it can answer at once
 const kv = new Map();
 const prog = tag => p => { if (p.status === 'progress' && p.total) postMessage({ type: 'progress', key: tag + p.file, loaded: p.loaded, total: p.total }); };
@@ -4434,22 +4434,15 @@ const chat = (msgs, gen) => llm.tokenizer.apply_chat_template(msgs, { add_genera
 async function handle(m) {
   try {
     if (m.type === 'load') {
-      [stt, llm] = await Promise.all([
-        T.pipeline('automatic-speech-recognition', m.models.stt, { dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' }, device: 'wasm', progress_callback: prog('stt') }),
-        T.pipeline('text-generation', m.models.llm, { dtype: 'q8', device: 'wasm', progress_callback: prog('llm') }),
-      ]);
+      llm = await T.pipeline('text-generation', m.models.llm, { dtype: 'q8', device: 'wasm', progress_callback: prog('llm') });
       // words a person on the street would not say: chatbot apologies and disclaimers
       banned = [' confusion', ' misunderstanding', ' apologize', ' apologies', ' Apologies', ' AI', ' assistant', ' chatbot', ' as an', ' As an'].map(w => llm.tokenizer.encode(w, { add_special_tokens: false }));
       // warm up both paths (a fresh prompt and a primed one) so the first real conversation is as fast as the rest
-      await stt(new Float32Array(16000), { max_new_tokens: 2 });
       const warm = [{ role: 'system', content: 'You are Sam, a 30-year-old man who works as a cook in Harbor City. You are friendly and relaxed. A stranger talks to you on a street. Reply as Sam in one short spoken sentence.' }];
       const pre = await llm.model.generate(Object.assign({}, chat(warm, false), { max_new_tokens: 1, return_dict_in_generate: true }));
       await llm.model.generate(Object.assign({}, chat([...warm, { role: 'user', content: 'Hi there, how are you doing today?' }], true), { past_key_values: pre.past_key_values, max_new_tokens: 6, do_sample: true, temperature: 0.35, top_p: 0.9, repetition_penalty: 1.1, bad_words_ids: banned,
         streamer: new T.TextStreamer(llm.tokenizer, { skip_prompt: true, callback_function: () => { } }), stopping_criteria: new T.InterruptableStoppingCriteria() }));
       postMessage({ type: 'done', id: m.id });
-    } else if (m.type === 'stt') {
-      const r = await stt(m.pcm, { max_new_tokens: Math.ceil(m.pcm.length / 16000 * 7) + 4 });
-      postMessage({ type: 'done', id: m.id, text: r.text || '' });
     } else if (m.type === 'prime') {
       const inp = chat(m.messages, false), c = kv.get(m.key);
       if (!(c && c.ids.length === inp.input_ids.data.length && c.ids.every((v, i) => v === inp.input_ids.data[i]))) {
@@ -4471,6 +4464,25 @@ async function handle(m) {
 }
 onmessage = e => { const m = e.data; chain = chain.then(() => handle(m)); }; // one job at a time, in order
 `;
+// hearing has a worker of its own, so a reply model that is busy never keeps you waiting to be understood
+const TALK_EARS = String.raw`
+import * as T from '${TALK_LIB}';
+T.env.allowLocalModels = false;
+let stt = null;
+const prog = tag => p => { if (p.status === 'progress' && p.total) postMessage({ type: 'progress', key: tag + p.file, loaded: p.loaded, total: p.total }); };
+onmessage = async e => {
+  const m = e.data;
+  try {
+    if (m.type === 'load') {
+      stt = await T.pipeline('automatic-speech-recognition', m.models.stt, { dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' }, device: 'wasm', progress_callback: prog('stt') });
+      await stt(new Float32Array(16000), { max_new_tokens: 2 }); // warm up
+      postMessage({ type: 'done', id: m.id });
+    } else if (m.type === 'stt') {
+      const r = await stt(m.pcm, { max_new_tokens: Math.ceil(m.pcm.length / 16000 * 7) + 4 });
+      postMessage({ type: 'done', id: m.id, text: r.text || '' });
+    }
+  } catch (err) { postMessage({ type: 'error', id: m.id, message: String(err && err.message || err) }); }
+};`;
 // Piper: a fast VITS voice (one sentence in about a second on a phone CPU), 900 speakers in one 79 MB file
 const TALK_VOICE = String.raw`
 import * as ort from '${TALK_ORT}ort.wasm.min.mjs';
@@ -4542,7 +4554,7 @@ const TALK_MALE_VOICE = /\bmale\b|daniel|\balex\b|\bfred\b|david|\bmark\b|george
 
 const TALK = {
   micOn: false, state: 'idle', ready: false, load: null, prog: {}, pct: 0, err: '',
-  worker: null, voiceW: null, seq: 1, wait: {}, useDevice: false, devVoices: { f: [], m: [] }, vk: { f: 0, m: 0 },
+  worker: null, ears: null, voiceW: null, seq: 1, wait: {}, useDevice: false, devVoices: { f: [], m: [] }, vk: { f: 0, m: 0 },
   stream: null, actx: null, src: null, proc: null, rec: [], speechT: 0, silT: 0, noise: 0.004, rate: 16000,
   bags: {}, bubble: null, bubbleT: 0, bubbleKey: '', talker: null, audioOut: null,
 
@@ -4623,8 +4635,9 @@ const TALK = {
         return w;
       };
       if (!this.worker) this.worker = mk(TALK_BRAIN);
+      if (!this.ears) this.ears = mk(TALK_EARS);
       if (!this.useDevice && !this.voiceW) this.voiceW = mk(TALK_VOICE);
-      await Promise.all([this.call({ type: 'load', models: TALK_MODELS }), this.useDevice ? null : this.call({ type: 'load', url: TALK_PIPER }, null, this.voiceW)]);
+      await Promise.all([this.call({ type: 'load', models: TALK_MODELS }, null, this.ears), this.call({ type: 'load', models: TALK_MODELS }), this.useDevice ? null : this.call({ type: 'load', url: TALK_PIPER }, null, this.voiceW)]);
       this.ready = true; this.state = this.micOn ? 'listening' : 'idle';
       HUD.toast('Talk AI ready. Walk up to someone and talk.', 3);
     })().catch(e => { this.err = e && e.message || String(e); this.load = null; this.state = 'idle'; HUD.toast('Could not load the talk AI: ' + this.err, 5); });
@@ -4691,7 +4704,7 @@ const TALK = {
     const p = this.target(), P = p && this.persona(p);
     if (p) { p.talkT = 14; p.talkHold = true; this.talker = p; this.say(p, P, '…', true); }
     try {
-      const heard = ((await this.call({ type: 'stt', pcm }, [pcm.buffer])).text || '').replace(/\[[^\]]*\]|\([^)]*\)/g, '').trim();
+      const heard = ((await this.call({ type: 'stt', pcm }, [pcm.buffer], this.ears)).text || '').replace(/\[[^\]]*\]|\([^)]*\)/g, '').trim();
       if (heard.length < 2) { if (p && this.bubble) this.bubble.visible = false; this.state = 'listening'; return; }
       HUD.toast('You: ' + heard, 3);
       if (!p) { HUD.toast('Nobody is close enough to hear you. Walk up and face them.', 2.5); this.state = this.micOn ? 'listening' : 'idle'; return; }
