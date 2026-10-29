@@ -3911,6 +3911,7 @@ async function xrStart(director) {
 }
 function xrEnded() {
   XR.session = null; XR.baseRef = null;
+  if (XR.hiddenCar) { XR.hiddenCar.paintMesh.visible = true; XR.hiddenCar.trimMesh.visible = true; XR.hiddenCar = null; }
   scene.add(camera);
   if (XR.q) { Q = XR.q; XR.q = null; applyShadowQuality(); onResize(); }
   if (XR.vis) XR.vis.root.visible = false;
@@ -3987,7 +3988,10 @@ function xrInput(I) {
     const now = performance.now();
     if (R.shape.pinch && !R.shape.gun) { if (!R.pinchAt) R.pinchAt = now; } else { R.pinchAt = 0; R.pinchFired = false; }
     if (player.state === 'foot' && R.shape.pinch && !R.prevShape.pinch && !(L.kind === 'hand' && L.shape.pinch)) carToggle = carToggle || !!player.nearestCar();
-    if (player.state === 'car' && R.pinchAt && !R.pinchFired && now - R.pinchAt > 1000) { R.pinchFired = true; carToggle = true; }
+    // hands: get out only when parked, by holding both pinches for a second (never while steering)
+    const parked = player.car && Math.abs(player.car.speed) < 1.5;
+    if (player.state === 'car' && parked && R.shape.pinch && L.kind === 'hand' && L.shape.pinch) { if (!XR.bothAt) XR.bothAt = now; if (now - XR.bothAt > 1000 && !XR.bothFired) { XR.bothFired = true; carToggle = true; } }
+    else if (!(R.shape.pinch && L.shape.pinch)) { XR.bothAt = 0; XR.bothFired = false; }
   }
   if (carToggle) {
     if (player.state === 'car') player.exitCar();
@@ -4048,12 +4052,15 @@ function xrUpdate(dt, rdt, live) {
   const headYawL = Math.atan2(-XR.fwdL.x, -XR.fwdL.z);
   if (car) {
     if (!XR.wasCar) { XR.wasCar = true; XR.carAnchor.copy(XR.head); XR.carAnchorYaw = headYawL; XR.carSnap = 0; }
+    // from the seat the car's roof, pillars and bonnet would block the view: only the windows stay
+    if (car.paintMesh) { car.paintMesh.visible = false; car.trimMesh.visible = false; XR.hiddenCar = car; }
     XR.rigYaw = car.heading + Math.PI - XR.carAnchorYaw + XR.carSnap;
     XR_SEAT.set(0.37, car.seatHips + 0.68, -0.22); car.body.updateMatrixWorld(); car.body.localToWorld(XR_SEAT);
     _xa.copy(XR.carAnchor).applyAxisAngle(_xUp, XR.rigYaw);
     XR.rigPos.subVectors(XR_SEAT, _xa);
   } else {
     if (XR.wasCar) { XR.wasCar = false; XR.yaw = XR.rigYaw; }
+    if (XR.hiddenCar) { XR.hiddenCar.paintMesh.visible = true; XR.hiddenCar.trimMesh.visible = true; XR.hiddenCar = null; }
     XR.rigYaw = XR.yaw;
     const p = player.root.position;
     _xa.set(XR.head.x, 0, XR.head.z).applyAxisAngle(_xUp, XR.rigYaw);
