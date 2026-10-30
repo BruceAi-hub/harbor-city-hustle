@@ -4586,7 +4586,7 @@ const TALK_MALE_VOICE = /\bmale\b|daniel|\balex\b|\bfred\b|david|\bmark\b|george
 
 const TALK = {
   micOn: false, state: 'idle', ready: false, load: null, prog: {}, pct: 0, err: '',
-  worker: null, ears: null, voiceW: null, onDev: false, seq: 1, wait: {}, useDevice: false, devVoices: { f: [], m: [] }, vk: { f: 0, m: 0 },
+  worker: null, ears: null, voiceW: null, onDev: false, hearReady: false, seq: 1, wait: {}, useDevice: false, devVoices: { f: [], m: [] }, vk: { f: 0, m: 0 },
   stream: null, actx: null, src: null, proc: null, rec: [], speechT: 0, silT: 0, noise: 0.004, rate: 16000,
   bags: {}, bubble: null, bubbleT: 0, bubbleKey: '', talker: null, audioOut: null,
 
@@ -4600,9 +4600,9 @@ const TALK = {
     if (this.micOn) { this.micOn = false; this.stopMic(); HUD.toast('Mic muted.', 1.5); return; }
     this.micOn = true;
     try { await this.startMic(); } catch (e) { this.micOn = false; HUD.toast('Microphone blocked: ' + (e && e.message || e), 4); return; }
-    HUD.toast(this.ready ? 'Mic on. Walk up to someone and talk.' : this.onDev ? 'Mic on. Loading the talk AI from this device.' : 'Mic on. Downloading the talk AI first (about 470 MB, once).', 3);
+    HUD.toast(this.hearReady ? 'Mic on. Walk up to someone and talk.' : this.onDev ? 'Mic on. Loading the talk AI from this device.' : 'Mic on. Downloading the talk AI first (about 470 MB, once).', 3);
     this.ensure();
-    if (this.ready) this.state = 'listening';
+    if (this.hearReady) this.state = 'listening';
   },
   // ---- microphone with a simple voice detector: an utterance ends after under half a second of quiet ----
   async startMic() {
@@ -4621,7 +4621,7 @@ const TALK = {
   stopMic() {
     try { this.proc && (this.proc.onaudioprocess = null); this.src && this.src.disconnect(); this.stream && this.stream.getTracks().forEach(t => t.stop()); this.actx && this.actx.close(); } catch (_) { }
     this.stream = this.actx = this.src = this.proc = null; this.rec = []; this.speechT = 0; this.silT = 0;
-    if (this.state === 'listening') this.state = this.load && !this.ready ? 'loading' : 'idle';
+    if (this.state === 'listening') this.state = this.load && !this.hearReady ? 'loading' : 'idle';
   },
   onAudio(ch) {
     if (!this.micOn || this.state !== 'listening') { this.rec = []; this.speechT = 0; return; }
@@ -4680,11 +4680,16 @@ const TALK = {
       if (!this.ears) this.ears = mk(TALK_EARS);
       if (!this.useDevice && !this.voiceW) this.voiceW = mk(TALK_VOICE);
       const t0 = performance.now();
-      const [ears, brain, voice] = await Promise.all([this.call({ type: 'load', models: TALK_MODELS }, null, this.ears), this.call({ type: 'load', models: TALK_MODELS }), this.useDevice ? null : this.call({ type: 'load', url: TALK_PIPER }, null, this.voiceW)]);
+      // hearing and the voice load first, so you can start talking; the reply model finishes loading behind them
+      const [ears, voice] = await Promise.all([this.call({ type: 'load', models: TALK_MODELS }, null, this.ears), this.useDevice ? null : this.call({ type: 'load', url: TALK_PIPER }, null, this.voiceW)]);
+      this.hearReady = true; this.state = this.micOn ? 'listening' : 'idle';
+      const heardS = Math.round((performance.now() - t0) / 1000);
+      HUD.toast(`Talk AI can hear you (${heardS} s). Replies are still loading.`, 3);
+      const brain = await this.call({ type: 'load', models: TALK_MODELS });
       const net = [ears, brain, voice].reduce((a, r) => a + (r && r.net || 0), 0), secs = Math.round((performance.now() - t0) / 1000);
       this.report = `Ready in ${secs} s, ${net} MB downloaded (hearing ${Math.round(ears.ms / 1000)} s, reply ${Math.round(brain.ms / 1000)} s${voice ? ', voice ' + Math.round(voice.ms / 1000) + ' s' : ''}).`;
       this.stats = { secs, net, ears: ears.ms, brain: brain.ms, voice: voice && voice.ms };
-      this.ready = true; this.state = this.micOn ? 'listening' : 'idle';
+      this.ready = true;
       HUD.toast('Talk AI ready. ' + this.report, 4);
     })().catch(e => { this.err = e && e.message || String(e); this.load = null; this.state = 'idle'; HUD.toast('Could not load the talk AI: ' + this.err, 5); });
     return this.load;
@@ -4744,7 +4749,7 @@ const TALK = {
     return best;
   },
   async hear(pcm) {
-    if (!this.ready) { HUD.toast(`Still downloading the talk AI (${this.pct}%).`, 2); return; }
+    if (!this.hearReady) { HUD.toast(`Still loading the talk AI (${this.pct}%).`, 2); return; }
     this.state = 'thinking';
     // whoever you are facing stops, turns to you and shows they heard you, before the words are even transcribed
     const p = this.target(), P = p && this.persona(p);
