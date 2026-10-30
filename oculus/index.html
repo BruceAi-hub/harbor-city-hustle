@@ -2591,8 +2591,8 @@ class Player {
     const mx = I.mx, mz = I.mz, mag = Math.min(1, Math.hypot(mx, mz));
     const cy = cam.yaw, fx = Math.sin(cy), fz = Math.cos(cy);
     let dx = fx * mz - fz * mx, dz = fz * mz + fx * mx, target = 0;
-    if (DIRECTOR.fly) { // superhero flight: stick moves, jump climbs, sprint/Z descends
-      const gy0 = groundY(pos.x, pos.z), up = (I.jumpHeld ? 1 : 0) - (I.descend ? 1 : 0);
+    if (DIRECTOR.fly || I.vrFly) { // superhero flight: stick moves, jump climbs, sprint/Z descends; in VR the head climbs and dives
+      const gy0 = groundY(pos.x, pos.z), up = (I.jumpHeld ? 1 : 0) - (I.descend ? 1 : 0) + (I.look || 0);
       if (up > 0 || pos.y > gy0 + 0.25) {
         const dl = Math.hypot(dx, dz), sp = 20;
         if (mag > 0.08) { dx /= dl; dz /= dl; this.mdx = dx; this.mdz = dz; this.yaw = dampA(this.yaw, Math.atan2(dx, dz), 8, dt); }
@@ -3825,7 +3825,7 @@ const XR = {
   head: new THREE.Vector3(), headQ: new THREE.Quaternion(), headW: new THREE.Vector3(), fwdL: new THREE.Vector3(), fwdW: new THREE.Vector3(), prevHead: null,
   wasCar: false, carAnchor: new THREE.Vector3(), carAnchorYaw: 0, carSnap: 0,
   hands: { left: null, right: null }, snapLatch: false, yHeld: 0, yLong: false,
-  surrender: false, handsUpT: 0, bustT: 0, q: null,
+  surrender: false, handsUpT: 0, bustT: 0, q: null, flying: false,
   stat: { moved: 0, sprint: 0, turned: 0, jumps: 0, punches: 0, shots: 0, mic: 0, car: 0 },
   tut: -1, tutT: 0, msgs: [], panel: null, wrist: null, wristT: 0, vis: null,
 };
@@ -3979,6 +3979,12 @@ function xrInput(I) {
       I.mz = 1; I.sprint = R.kind === 'hand' && R.shape.pinch && !R.shape.gun; I.walk = !I.sprint;
     }
     if (rcl) { I.jumpPressed = xrPressed(R, 4); I.jumpHeld = xrHeld(R, 4); }
+    // flying: hold A (or jump) and tip your head up to climb, down to dive. Looking straight ahead is walking.
+    const lookUp = clamp((XR.fwdL.y - 0.45) / 0.35, 0, 1), lookDn = clamp((-XR.fwdL.y - 0.45) / 0.35, 0, 1);
+    const look = lookUp - lookDn;
+    if (!XR.flying && look > 0 && (I.jumpHeld || !player.onGround)) XR.flying = true;
+    if (XR.flying && player.onGround && look <= 0 && !I.jumpHeld) XR.flying = false;
+    I.vrFly = XR.flying; I.look = look;
     if (I.mx || I.mz) XR.stat.moved += player.curSpeed * PAD.dt; if (I.sprint && (I.mx || I.mz)) XR.stat.sprint += PAD.dt;
     if (I.jumpPressed && player.onGround) XR.stat.jumps++;
     // snap turn on the right stick
