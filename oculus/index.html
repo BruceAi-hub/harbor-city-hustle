@@ -3869,6 +3869,7 @@ const xrHeld = (h, k) => (h.btn[k] || 0) > 0.6;
 
 // ---------- setup ----------
 async function xrInit() {
+  TALK.checkDevice(); // is the AI already saved on this device? (then it loads from there, no download)
   if (!navigator.xr || !navigator.xr.isSessionSupported) return;
   try { XR.supported = await navigator.xr.isSessionSupported('immersive-vr'); } catch (_) { XR.supported = false; }
   if (!XR.supported) return;
@@ -3893,6 +3894,7 @@ async function xrStart(director) {
     // ask for the session first, while the button press still counts as a user action
     const s = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] });
     if (GAME.state === 'menu') GAME.start(director); else if (GAME.state === 'paused') GAME.resume();
+    if (TALK.onDev && !TALK.ready) TALK.ensure(); // start loading the saved AI now, so it is ready by the time you press X
     XR.session = s; s.addEventListener('end', xrEnded);
     renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(s);
@@ -4578,7 +4580,7 @@ const TALK_MALE_VOICE = /\bmale\b|daniel|\balex\b|\bfred\b|david|\bmark\b|george
 
 const TALK = {
   micOn: false, state: 'idle', ready: false, load: null, prog: {}, pct: 0, err: '',
-  worker: null, ears: null, voiceW: null, seq: 1, wait: {}, useDevice: false, devVoices: { f: [], m: [] }, vk: { f: 0, m: 0 },
+  worker: null, ears: null, voiceW: null, onDev: false, seq: 1, wait: {}, useDevice: false, devVoices: { f: [], m: [] }, vk: { f: 0, m: 0 },
   stream: null, actx: null, src: null, proc: null, rec: [], speechT: 0, silT: 0, noise: 0.004, rate: 16000,
   bags: {}, bubble: null, bubbleT: 0, bubbleKey: '', talker: null, audioOut: null,
 
@@ -4592,7 +4594,7 @@ const TALK = {
     if (this.micOn) { this.micOn = false; this.stopMic(); HUD.toast('Mic muted.', 1.5); return; }
     this.micOn = true;
     try { await this.startMic(); } catch (e) { this.micOn = false; HUD.toast('Microphone blocked: ' + (e && e.message || e), 4); return; }
-    HUD.toast(this.ready ? 'Mic on. Walk up to someone and talk.' : 'Mic on. Downloading the talk AI first (about 470 MB, once).', 3);
+    HUD.toast(this.ready ? 'Mic on. Walk up to someone and talk.' : this.onDev ? 'Mic on. Loading the talk AI from this device.' : 'Mic on. Downloading the talk AI first (about 470 MB, once).', 3);
     this.ensure();
     if (this.ready) this.state = 'listening';
   },
@@ -4647,9 +4649,19 @@ const TALK = {
     delete this.wait[m.id];
     if (m.type === 'error') w.rej(new Error(m.message)); else w.res(m);
   },
+  // the models are saved in this browser after the first download; check that, so the page says "loading" instead of "downloading"
+  async checkDevice() {
+    try {
+      const keys = (await (await caches.open('transformers-cache')).keys()).map(r => r.url), voice = (await (await caches.open('hch-voice-v1')).keys()).map(r => r.url);
+      this.onDev = ['SmolLM2-360M-Instruct', 'moonshine-tiny'].every(m => keys.some(u => u.includes(m))) && voice.some(u => u.includes('en_US-libritts_r-medium'));
+    } catch (_) { this.onDev = false; }
+    return this.onDev;
+  },
   ensure() {
     if (this.load) return this.load;
     this.state = 'loading'; this.err = '';
+    // ask the browser to keep the saved models instead of clearing them to make room
+    try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (_) { }
     this.load = (async () => {
       this.useDevice = await this.deviceVoices();
       const mk = src => {
@@ -4670,7 +4682,7 @@ const TALK = {
   updatePct() {
     let a = 0, b = 0; for (const k in this.prog) { a += this.prog[k][0]; b += this.prog[k][1]; }
     this.pct = b ? Math.floor(100 * a / b) : 0;
-    const n = document.getElementById('talkNote'); if (n) n.textContent = `Downloading the talk AI: ${this.pct}%`;
+    const n = document.getElementById('talkNote'); if (n) n.textContent = this.onDev ? 'Loading the talk AI from this device…' : `Downloading the talk AI: ${this.pct}%`;
   },
   // device voices only when there is at least one woman's and one man's English voice to tell people apart
   deviceVoices() {
