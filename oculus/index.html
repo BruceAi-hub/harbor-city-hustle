@@ -3638,7 +3638,7 @@ function initMenus() {
   $('apkLink').addEventListener('click', () => { const n = $('apkNote'); n.hidden = false; n.textContent = 'Sideload it with SideQuest or adb install. The app opens this game in the Quest Browser, where VR works.'; });
   $('talkBtn').addEventListener('click', () => {
     const n = $('talkNote'); n.hidden = false; n.textContent = 'Downloading the talk AI…';
-    TALK.ensure().then(() => { if (TALK.ready) n.textContent = 'Talk AI ready. In VR press X to unmute your mic (keyboard: T).'; });
+    TALK.ensure().then(() => { if (TALK.ready) n.textContent = 'Talk AI ready. ' + TALK.report + ' In VR press X to unmute your mic (keyboard: T).'; });
   });
   $('directorBtn').addEventListener('click', () => { const p = $('dirPanel'); p.hidden = !p.hidden; if (!p.hidden) p.scrollIntoView({ block: 'nearest' }); });
   $('dirStart').addEventListener('click', () => GAME.start(true));
@@ -4450,6 +4450,7 @@ import * as T from '${TALK_LIB}';
 T.env.allowLocalModels = false;
 // several CPU cores when the page is cross-origin isolated (oculus/coi-sw.js), leaving a couple for the game
 T.env.backends.onnx.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 2)) : 1;
+const netMB = () => Math.round(performance.getEntriesByType('resource').filter(e => /huggingface|xethub|cas-bridge|jsdelivr|piper/.test(e.name)).reduce((a, e) => a + (e.transferSize || 0), 0) / 1e6);
 let llm = null, chain = Promise.resolve(), banned = [];
 // primed conversations: the model reads a person's instructions while you walk up, so it can answer at once
 const kv = new Map();
@@ -4460,6 +4461,7 @@ const chat = (msgs, gen) => llm.tokenizer.apply_chat_template(msgs, { add_genera
 async function handle(m) {
   try {
     if (m.type === 'load') {
+      const t0 = performance.now();
       llm = await T.pipeline('text-generation', m.models.llm, { dtype: 'q8', device: 'wasm', progress_callback: prog('llm') });
       // words a person on the street would not say: chatbot apologies and disclaimers
       banned = [' confusion', ' misunderstanding', ' apologize', ' apologies', ' Apologies', ' AI', ' assistant', ' chatbot', ' as an', ' As an'].map(w => llm.tokenizer.encode(w, { add_special_tokens: false }));
@@ -4468,7 +4470,7 @@ async function handle(m) {
       const pre = await llm.model.generate(Object.assign({}, chat(warm, false), { max_new_tokens: 1, return_dict_in_generate: true }));
       await llm.model.generate(Object.assign({}, chat([...warm, { role: 'user', content: 'Hi there, how are you doing today?' }], true), { past_key_values: pre.past_key_values, max_new_tokens: 6, do_sample: true, temperature: 0.35, top_p: 0.9, repetition_penalty: 1.1, bad_words_ids: banned,
         streamer: new T.TextStreamer(llm.tokenizer, { skip_prompt: true, callback_function: () => { } }), stopping_criteria: new T.InterruptableStoppingCriteria() }));
-      postMessage({ type: 'done', id: m.id });
+      postMessage({ type: 'done', id: m.id, ms: Math.round(performance.now() - t0), net: netMB() });
     } else if (m.type === 'prime') {
       const inp = chat(m.messages, false), c = kv.get(m.key);
       if (!(c && c.ids.length === inp.input_ids.data.length && c.ids.every((v, i) => v === inp.input_ids.data[i]))) {
@@ -4494,15 +4496,17 @@ onmessage = e => { const m = e.data; chain = chain.then(() => handle(m)); }; // 
 const TALK_EARS = String.raw`
 import * as T from '${TALK_LIB}';
 T.env.allowLocalModels = false;
+const netMB = () => Math.round(performance.getEntriesByType('resource').filter(e => /huggingface|xethub|cas-bridge|jsdelivr|piper/.test(e.name)).reduce((a, e) => a + (e.transferSize || 0), 0) / 1e6);
 let stt = null;
 const prog = tag => p => { if (p.status === 'progress' && p.total) postMessage({ type: 'progress', key: tag + p.file, loaded: p.loaded, total: p.total }); };
 onmessage = async e => {
   const m = e.data;
   try {
     if (m.type === 'load') {
+      const t0 = performance.now();
       stt = await T.pipeline('automatic-speech-recognition', m.models.stt, { dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' }, device: 'wasm', progress_callback: prog('stt') });
       await stt(new Float32Array(16000), { max_new_tokens: 2 }); // warm up
-      postMessage({ type: 'done', id: m.id });
+      postMessage({ type: 'done', id: m.id, ms: Math.round(performance.now() - t0), net: netMB() });
     } else if (m.type === 'stt') {
       const r = await stt(m.pcm, { max_new_tokens: Math.ceil(m.pcm.length / 16000 * 7) + 4 });
       postMessage({ type: 'done', id: m.id, text: r.text || '' });
@@ -4514,6 +4518,7 @@ const TALK_VOICE = String.raw`
 import * as ort from '${TALK_ORT}ort.wasm.min.mjs';
 import { phonemize } from '${TALK_PHON}';
 ort.env.wasm.wasmPaths = '${TALK_ORT}'; ort.env.wasm.numThreads = self.crossOriginIsolated ? 2 : 1;
+const netMB = () => Math.round(performance.getEntriesByType('resource').filter(e => /huggingface|xethub|cas-bridge|jsdelivr|piper/.test(e.name)).reduce((a, e) => a + (e.transferSize || 0), 0) / 1e6);
 let cfg = null, sess = null, chain = Promise.resolve();
 async function get(url, key) { // downloaded once, then kept in the browser's cache storage
   let c = null; try { c = await caches.open('hch-voice-v1'); const hit = await c.match(url); if (hit) return hit; } catch (_) { c = null; }
@@ -4546,10 +4551,11 @@ async function synth(text, sid, len) {
 async function handle(m) {
   try {
     if (m.type === 'load') {
+      const t0 = performance.now();
       cfg = await (await get(m.url + '.json', 'voicecfg')).json();
       sess = await ort.InferenceSession.create(new Uint8Array(await (await get(m.url, 'voice')).arrayBuffer()), { executionProviders: ['wasm'] });
       await synth('Hi.', 0, 1); // warm up
-      postMessage({ type: 'done', id: m.id });
+      postMessage({ type: 'done', id: m.id, ms: Math.round(performance.now() - t0), net: netMB() });
     } else if (m.type === 'tts') {
       const a = await synth(m.text, m.sid, m.len);
       postMessage({ type: 'done', id: m.id, audio: a, rate: cfg.audio.sample_rate }, [a.buffer]);
@@ -4673,9 +4679,13 @@ const TALK = {
       if (!this.worker) this.worker = mk(TALK_BRAIN);
       if (!this.ears) this.ears = mk(TALK_EARS);
       if (!this.useDevice && !this.voiceW) this.voiceW = mk(TALK_VOICE);
-      await Promise.all([this.call({ type: 'load', models: TALK_MODELS }, null, this.ears), this.call({ type: 'load', models: TALK_MODELS }), this.useDevice ? null : this.call({ type: 'load', url: TALK_PIPER }, null, this.voiceW)]);
+      const t0 = performance.now();
+      const [ears, brain, voice] = await Promise.all([this.call({ type: 'load', models: TALK_MODELS }, null, this.ears), this.call({ type: 'load', models: TALK_MODELS }), this.useDevice ? null : this.call({ type: 'load', url: TALK_PIPER }, null, this.voiceW)]);
+      const net = [ears, brain, voice].reduce((a, r) => a + (r && r.net || 0), 0), secs = Math.round((performance.now() - t0) / 1000);
+      this.report = `Ready in ${secs} s, ${net} MB downloaded (hearing ${Math.round(ears.ms / 1000)} s, reply ${Math.round(brain.ms / 1000)} s${voice ? ', voice ' + Math.round(voice.ms / 1000) + ' s' : ''}).`;
+      this.stats = { secs, net, ears: ears.ms, brain: brain.ms, voice: voice && voice.ms };
       this.ready = true; this.state = this.micOn ? 'listening' : 'idle';
-      HUD.toast('Talk AI ready. Walk up to someone and talk.', 3);
+      HUD.toast('Talk AI ready. ' + this.report, 4);
     })().catch(e => { this.err = e && e.message || String(e); this.load = null; this.state = 'idle'; HUD.toast('Could not load the talk AI: ' + this.err, 5); });
     return this.load;
   },
