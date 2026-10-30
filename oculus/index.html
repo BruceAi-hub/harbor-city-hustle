@@ -3534,7 +3534,7 @@ function readInput() {
     if (P('KeyC')) cam.far = !cam.far;
     if (P('KeyP') || P('Escape')) GAME.pause();
   } else if (GAME.state === 'paused' && (P('KeyP') || P('Escape'))) GAME.resume();
-  xrInput(I);
+  try { xrInput(I); } catch (e) { xrFault(e); }
 }
 function clearEdges() { pressed.clear(); TOUCH.edges.clear(); }
 
@@ -3677,7 +3677,7 @@ function frame(now) {
   const dt = live ? rdt * GAME.timeScale : 0;
   readInput();
   if (live) step(dt, rdt);
-  if (renderer.xr.isPresenting) xrUpdate(dt, rdt, live); else updateCamera(dt, live ? rdt : 0);
+  if (renderer.xr.isPresenting) { try { xrUpdate(dt, rdt, live); } catch (e) { xrFault(e); } } else updateCamera(dt, live ? rdt : 0);
   TALK.update(rdt);
   updateFrustum(); updateSunShadow();
   renderer.render(scene, camera);
@@ -3917,6 +3917,17 @@ function xrEnded() {
   if (XR.vis) XR.vis.root.visible = false;
   player.root.visible = true; XR.surrender = false; cam.init = false;
   if (GAME.state === 'play') GAME.pause();
+}
+
+
+// ---------- errors in VR: show them inside the headset (a thrown error would stop the VR picture) ----------
+function xrFault(e) {
+  const where = String(e && e.stack || '').split('\n').slice(1, 3).map(l => l.trim().replace(/\(.*\//, '(')).join(' ');
+  const msg = 'VR error: ' + (e && e.message || e) + ' · ' + where;
+  if (XR.fault !== msg) { XR.fault = msg; xrSay(msg, 15, false); }
+  try { if (XR.hiddenCar) { XR.hiddenCar.paintMesh.visible = true; if (XR.hiddenCar.trimMesh) XR.hiddenCar.trimMesh.visible = true; XR.hiddenCar = null; } } catch (_) { }
+  try { if (player.state === 'car') player.exitCar(true); } catch (_) { }
+  XR.wasCar = false;
 }
 
 // ---------- per-frame input (called at the end of readInput) ----------
